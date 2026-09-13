@@ -1,0 +1,56 @@
+{
+  "title": "Eastern Front 1941–1945 / 東部戦線3Dアニメーション",
+  "duration_seconds": 124,
+  "fps": 24,
+  "video_resolution": [
+    1440,
+    870
+  ],
+  "colors": {
+    "Germany": "#111318",
+    "Soviet Union": "#c92535"
+  },
+  "model": "Manual generalized frontline polylines interpreted from West Point campaign maps. Continuous interpolation between key dates. Not daily unit positions.",
+  "geometry": "Published Natural Earth coastline / rivers, Mercator projection. Extruded board with 3D unit meshes and attack curves; no terrain elevation model.",
+  "omissions": [
+    "Arctic and Finnish fronts",
+    "Detailed allied force distinctions",
+    "Western Allies",
+    "Detailed Crimea and other separate fronts",
+    "Exact pocket dimensions and daily territorial control"
+  ],
+  "validation": {
+    "video": "PASS: 12 representative source frames visually inspected; encoded 1942-11-23 frame inspected. H.264 1440x870, 24 fps, 124 seconds, 2976 decoded frames, all 2976 unique, continuous timestamps. No decoder errors.",
+    "interactive": "JavaScript scene construction, dates, event transitions and finite transforms validated in a Node simulation. Full browser rendering/interaction was not tested because local-file navigation was blocked."
+  },
+  "rebuild": [
+    "python render_animation.py",
+    "python assemble.py"
+  ],
+  "sources": [
+    {
+      "title": "West Point — World War II: European Theatre",
+      "url": "https://dhc.westpoint.edu/atlases/"
+    },
+    {
+      "title": "IWM — Operation Barbarossa",
+      "url": "https://www.iwm.org.uk/history/second-world-war/eastern-front/what-was-operation-barbarossa"
+    },
+    {
+      "title": "National WWII Museum — Stalingrad",
+      "url": "https://www.nationalww2museum.org/war/articles/stalingrad-experimentation-adaptation-implementation"
+    },
+    {
+      "title": "US National Archives — Operation Uranus",
+      "url": "https://reagan.blogs.archives.gov/2022/11/18/1942-80-years-operation-uranus-turning-the-tide-in-europe/"
+    },
+    {
+      "title": "IWM — Operation Bagration",
+      "url": "https://www.iwm.org.uk/history/second-world-war/eastern-front/operation-bagration"
+    },
+    {
+      "title": "Natural Earth / world-atlas — Coastlines",
+      "url": "https://github.com/topojson/world-atlas"
+    }
+  ]
+}
