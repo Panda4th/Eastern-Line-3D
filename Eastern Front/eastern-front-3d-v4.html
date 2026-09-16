@@ -205,10 +205,10 @@ const CASUALTY_EVENTS=[
    su:{url:'https://en.wikipedia.org/wiki/Operation_Bagration',note:'Krivosheev統計:戦死・行方不明178,000〜180,040人(戦傷・戦病590,848人は別数)。行方不明者の死亡認定根拠が確認できず採用しなかった'},
    wa:{url:null,note:'この戦域には参加していない'}}},
  {id:'vistula-oder-1945',title:'ヴィスワ=オーデル攻勢',front:'east',start:'1945-01-12',end:'1945-02-04',metric:'military_deaths',
-  losses:{de:295000,su:43476,wa:0},included:true,parentId:null,
-  coverageNote:'出典間で数値の幅が大きい(独軍戦死は15万〜29.5万人まで諸説あり、ソ連公式値は自軍過小・独軍過大に見積もる傾向が指摘される)。確認できた集計値を暫定採用し、確度は中程度として扱う。',
+  losses:{de:295000,su:null,wa:0},included:true,parentId:null,
+  coverageNote:'独軍戦死は15万〜29.5万人まで諸説あり出典間の幅が大きい(確認できた集計値を暫定採用し確度は中程度として扱う)。ソ連側はKrivosheev統計が「戦死・行方不明・捕虜」の合算値(43,476人)のみで、死亡者単体への分離が確認できないためnullとした。',
   basis:{de:{url:'https://en.wikipedia.org/wiki/Vistula%E2%80%93Oder_offensive',note:'独軍戦死295,000人・捕虜147,000人。史料により15万人前後とする記述もあり出典間の一致が低い'},
-   su:{url:'https://en.wikipedia.org/wiki/Vistula%E2%80%93Oder_offensive',note:'ソ連公式統計:戦死43,476人。同時代のソ連公表値は自軍損害を過小、独軍損害を過大に見積もる傾向が指摘されている'},
+   su:{url:'https://en.wikipedia.org/wiki/Vistula%E2%80%93Oder_offensive',note:'Krivosheev統計:irreversible casualties(戦死・行方不明・捕虜)43,476人。捕虜を含む合算のため死亡者数として採用しなかった'},
    wa:{url:null,note:'この戦域には参加していない'}}},
  {id:'berlin-1945',title:'ベルリンの戦い',front:'east',start:'1945-04-16',end:'1945-05-03',metric:'military_deaths',
   losses:{de:92000,su:null,wa:0},included:true,parentId:null,
@@ -615,7 +615,14 @@ window.animation={
 new ResizeObserver(resize).observe(stage);compactQuery.addEventListener('change',resize);resize();syncPlay();
 if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>{resetLabelSizeCache();updateLabelExclusionZones();frame(currentSec)});
 let prev=performance.now();
-function animate(now){const dt=Math.min(.05,(now-prev)/1000);prev=now;if(playing){currentSec+=dt*speed;if(currentSec>=total){currentSec=total;playing=false;syncPlay()}frame(currentSec)}requestAnimationFrame(animate)}
+function animate(now){
+ const dt=Math.min(.05,(now-prev)/1000);prev=now;
+ if(playing){currentSec+=dt*speed;if(currentSec>=total){currentSec=total;playing=false;syncPlay()}}
+ // Redraw while paused too when the HUD's own resize observer flagged a footprint change (e.g. a seek
+ // while stopped changed the casualty text): one extra frame at the same currentSec, then it settles.
+ if(playing||hudSizeDirty)frame(currentSec);
+ requestAnimationFrame(animate);
+}
 requestAnimationFrame(animate);
 })();
 </script><script type="text/plain" id="third-party-licenses">D3-ISC.txt
