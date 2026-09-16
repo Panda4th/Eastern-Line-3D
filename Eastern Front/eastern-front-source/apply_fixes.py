@@ -15,13 +15,15 @@ being swapped for the corresponding new block from the edited source files:
     documented in the final report; this script itself does not re-run node).
 
 Never overwrites the original artifact. Output is a new file, eastern-front-3d-v2.html.
+NOTE: OUTPUT_PATH must be changed to an unused filename before every re-run; re-running with a
+stale OUTPUT_PATH is rejected by the guard in main() below (the file it would overwrite already exists).
 """
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 INPUT_PATH = Path("C:/Users/meiko.nin/.claude/projects/Eastern Front/eastern-front-3d.html")
-OUTPUT_PATH = Path("C:/Users/meiko.nin/.claude/projects/Eastern Front/eastern-front-3d-v2.html")
+OUTPUT_PATH = Path("C:/Users/meiko.nin/.claude/projects/Eastern Front/eastern-front-3d-v3.html")
 
 APP_ORIG = ROOT / "assets" / "app.js.orig"
 APP_NEW = ROOT / "assets" / "app.js"
@@ -62,7 +64,10 @@ def build_replacements():
     old_app, new_app = read_bytes(APP_ORIG), read_bytes(APP_NEW)
     reps.append(("app.js (whole file)", old_app, new_app))
 
-    if APPLY_T8_LAND_CROP and LAND_CROP.exists():
+    if APPLY_T8_LAND_CROP:
+        if not LAND_CROP.exists():
+            print(f"ABORT: {LAND_CROP} is missing but APPLY_T8_LAND_CROP is True.", file=sys.stderr)
+            sys.exit(1)
         old_land, new_land = read_bytes(LAND_ORIG), read_bytes(LAND_CROP)
         reps.append(("LAND topology (T-8 crop)", old_land, new_land))
 
@@ -70,6 +75,13 @@ def build_replacements():
 
 
 def main():
+    if OUTPUT_PATH.resolve() == INPUT_PATH.resolve():
+        print("ABORT: OUTPUT_PATH must differ from INPUT_PATH (the input is unrecoverable).", file=sys.stderr)
+        sys.exit(1)
+    if OUTPUT_PATH.exists():
+        print(f"ABORT: {OUTPUT_PATH} already exists. Pick an unused filename.", file=sys.stderr)
+        sys.exit(1)
+
     src = read_bytes(INPUT_PATH)
     orig_len = len(src)
     applied_t8 = False
@@ -90,16 +102,11 @@ def main():
         print(f"ABORT: expected 260 split('\\n') pieces (259 lines), got {len(out_lines)}.", file=sys.stderr)
         sys.exit(1)
 
-    # 2, 12, 14, 16, 18 (1-indexed) must keep identical byte length.
-    for lineno in (2, 12, 14, 16, 18):
-        if len(out_lines[lineno - 1]) != len(in_lines[lineno - 1]):
-            print(f"ABORT: line {lineno} length changed ({len(in_lines[lineno-1])} -> {len(out_lines[lineno-1])}).", file=sys.stderr)
-            sys.exit(1)
-
-    # Line 17 (LAND) length check is only required when T-8 was NOT applied.
-    if not applied_t8 and len(out_lines[16]) != len(in_lines[16]):
-        print(f"ABORT: line 17 length changed without T-8 ({len(in_lines[16])} -> {len(out_lines[16])}).", file=sys.stderr)
-        sys.exit(1)
+    # NOTE (review N-6): a per-line byte-length check on lines 2, 12, 14, 16, 18 (and 17
+    # when T-8 is not applied) used to live here. It was removed because it was fully
+    # subsumed by the allowed-line-set check below: those line numbers are not in
+    # `allowed`, so any change to them (length-changing or not) already aborts via the
+    # "stray" check. Removing it only changes the abort message, not the exit behavior.
 
     allowed = {3, 6} | set(range(19, 109))
     if applied_t8:

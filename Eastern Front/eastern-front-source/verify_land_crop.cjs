@@ -12,6 +12,13 @@ const CW=2048, scale=CW/(40*Math.PI/180), merc=lat=>Math.log(Math.tan(Math.PI/4+
 const CH=Math.round(scale*(merc(61.7)-merc(42)));
 const projection=d3.geoMercator().scale(scale).translate([-scale*10*Math.PI/180,scale*merc(61.7)]).clipExtent([[0,0],[CW,CH]]);
 const geoPath=d3.geoPath(projection);
+// N-9: catch drift between this gate's hand-copied projection constants and assets/app.js.
+const appLines=fs.readFileSync('assets/app.js','utf8').split('\n');
+const pinned=[
+ 'const CW=2048, scale=CW/(40*Math.PI/180), merc=lat=>Math.log(Math.tan(Math.PI/4+lat*Math.PI/360));',
+ 'const projection=d3.geoMercator().scale(scale).translate([-scale*10*Math.PI/180,scale*merc(61.7)]).clipExtent([[0,0],[CW,CH]]);'];
+for(const s of pinned)assert(appLines.includes(s),'projection drifted from assets/app.js: '+s);
+assert(appLines.some(l=>l.startsWith('const CH=Math.round(scale*(merc(61.7)-merc(42))')),'CH formula drifted from assets/app.js');
 const landOrig=topojson.feature(LAND,LAND.objects.land);
 const landCrop=topojson.feature(LAND_CROP,LAND_CROP.objects.land);
 const pathOrig=geoPath(landOrig);

@@ -27,16 +27,6 @@
     "python render_animation.py",
     "python assemble.py"
   ],
-  "rebuild_notes": [
-    "assemble.py is the official build (its LAND_JSON placeholder now points at assets/land-crop.json, the T-8 cropped topology) but requires fontTools installed and an existing output/ directory, neither of which is present in this environment.",
-    "apply_fixes.py is the fallback used here instead: it patches assets/*.orig-derived blocks into the already-assembled eastern-front-3d.html byte-for-byte, avoiding a full font re-subset.",
-    "Any change to assets/template.html (CSS or markup) requires the getBoundingClientRect layout comparison from the review runbook (section 6.3-5); apply_fixes.py's replace-count / line-count / allowed-line guards only catch structural drift, not visual regressions (a deliberately broken #stage height passed every guard in testing)."
-  ],
-  "review_notes": [
-    "#play uses label-swap (再生/一時停止) instead of aria-pressed; WAI-ARIA APG discourages combining both signals on one toggle button, so the v1 aria-pressed was intentionally not restored when v2 dropped it (not an oversight).",
-    "Per-frame draw calls measured at 244-257 (t=10/41/60/90/118). Geometry/material instances are now shared across identical tank parts, cone heads and city pins, but draw-call count is dominated by ~73 five-mesh tank units; reducing it further would need InstancedMesh or mesh merging, which is out of scope for this pass.",
-    "The dynamic ribbon canvas (2048x1668, ~13.7MB) is still fully re-uploaded to the GPU every frame (~0.2ms/frame measured). Dirty-rect redraw was skipped because it cannot guarantee pixel-identical output, and lowering resolution would visibly change the map. isPointInPath x44/frame costs ~0.49ms/frame. Neither cost is dominant relative to the draw-call count above."
-  ],
   "sources": [
     {
       "title": "West Point — World War II: European Theatre",
