@@ -617,10 +617,11 @@ if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>{resetLabe
 let prev=performance.now();
 function animate(now){
  const dt=Math.min(.05,(now-prev)/1000);prev=now;
+ const wasPlaying=playing; // playing flips to false below on reaching `total`; the arrival frame must still draw
  if(playing){currentSec+=dt*speed;if(currentSec>=total){currentSec=total;playing=false;syncPlay()}}
  // Redraw while paused too when the HUD's own resize observer flagged a footprint change (e.g. a seek
  // while stopped changed the casualty text): one extra frame at the same currentSec, then it settles.
- if(playing||hudSizeDirty)frame(currentSec);
+ if(wasPlaying||hudSizeDirty)frame(currentSec);
  requestAnimationFrame(animate);
 }
 requestAnimationFrame(animate);
