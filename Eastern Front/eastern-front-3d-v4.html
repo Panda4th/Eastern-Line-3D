@@ -1498,7 +1498,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     return modelExclusion;
   }
 
-  // ================= Single frame(sec): pure function of the playhead, no history-dependent state =================
+  // ================= Playhead-driven display state: DOM/HUD helpers used by frame(sec) below =================
   // North mark lives in the date row, not the casualty panel, so its layout never depends on how tall the
   // panel's status text makes that panel. Only the arrow rotates; the "N" label stays fixed.
   const dateTextEl = document.querySelector("#date .date-text"),
@@ -1894,22 +1894,10 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     }
   }
 
-  function frame(sec) {
-    currentSec = T.MathUtils.clamp(sec, 0, total);
-    drawn = true;
-    const ms = dateFromSec(currentSec);
-    const eastState = frontStateAt(eastKeyframes, ms);
-    const westActive = ms >= westStartMs;
-    const westState = westActive ? frontStateAt(westKeyframes, Math.min(ms, westEndMs)) : null;
-    const ddayActive = ms >= ddayStartMs && ms < ddayEndMs;
-    // Action phase (boat/plane motion) is driven by playback seconds within the D-Day span, not by the
-    // historical-time ratio: dateFromSec is piecewise-linear across the inserted D-Day nodes, so a
-    // time-ratio here would desync the landing motion from the clock it is timed against.
-    const ddayU = ddayActive
-      ? T.MathUtils.clamp((currentSec - ddayStartSec) / (ddayEndSec - ddayStartSec), 0, 1)
-      : null;
-
-    // ---- §8 step2: camera ----
+  // ---- R2: frame(sec)'s six responsibilities, extracted into named functions that frame() below calls in
+  // a fixed order. Each takes the frame-local values it needs as parameters rather than reading frame()'s
+  // locals through closure, so its own dependencies are visible at its call site. ----
+  function updateCamera(ms) {
     const cam = currentCameraParams(ms);
     const dist = cam.distance * Math.max(1, 1.6 / camera.aspect);
     const camPos = new T.Vector3(
@@ -1920,11 +1908,13 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     camera.position.copy(camPos);
     camera.lookAt(cam.target);
     camera.updateMatrixWorld();
-
+    return cam;
+  }
+  // `.eligible` records existing land/time/scene gating; final `.visible` is decided once, later, by
+  // resolveModelVisibility/applyModelVisibility (§3/§5.2).
+  function placeRegularModels(ms, eastState, westState, westActive, ddayActive) {
     const { eastOffset, westOffset } = drawOverlay(eastState.front, westActive ? westState.front : null);
 
-    // ---- §8 step1: candidate positions/rotations. `.eligible` records existing land/time/scene gating;
-    // final `.visible` is decided once, later, by resolveModelVisibility/applyModelVisibility (§3/§5.2). ----
     // §3: during the Normandy detail, east-front candidates are limited to what's on-screen.
     placeTroopsOnFront(
       eastTroops,
@@ -1971,7 +1961,8 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       p.unit.userData.eligible = on;
       p.el.style.display = on ? "block" : "none";
     }
-
+  }
+  function updateDetailScene(ms, ddayActive, ddayU) {
     // Normandy detail: pre-built objects, only visibility/position updated, never rebuilt.
     normandyGroup.visible = ddayActive;
     if (ddayActive) {
@@ -2027,11 +2018,11 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       lc.clearRect(0, 0, stageW, stageH);
       beachFallbackEl.hidden = true;
     }
-
-    world.updateMatrixWorld(true); // §8: parent/child world matrices current before any projection below
-
-    // ---- §8 step3: text first (ddayClock/casualty totals may resize the HUD), then measure UI occupancy
-    // only if it actually changed footprint ----
+  }
+  // Text first (ddayClock/casualty totals may resize the HUD), then measure UI occupancy only if it
+  // actually changed footprint. Returns the date/clock text so frame() can reuse it below without
+  // re-deriving it (and without this function writing lastDateStr itself — see updateControls).
+  function updateHudText(ms, ddayActive) {
     let text;
     if (ddayActive) text = ddayClock;
     else {
@@ -2045,8 +2036,11 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     }
     renderCasualties(ms);
     if (hudSizeDirty) updateLabelExclusionZones();
-
-    // ---- §8 step4: priority labels, placed and measured before model density is resolved (§7) ----
+    return text;
+  }
+  // Priority labels, placed and measured before model density is resolved (§7); also places the north
+  // arrow, which is projected from the camera's look-at point the same way a label would be.
+  function placePriorityLabels(ms, cam, eastState, westActive, ddayActive) {
     const large = stageW > 800;
     const focus = ll(eastState.a.focus);
     eastCityLabels.forEach((c) => {
@@ -2081,12 +2075,11 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     if (Number.isFinite(northDx) && Number.isFinite(northDy) && (Math.abs(northDx) > 1e-6 || Math.abs(northDy) > 1e-6))
       lastNorthAngle = (Math.atan2(northDx, -northDy) * 180) / Math.PI;
     northArrow.style.transform = "rotate(" + lastNorthAngle + "deg)";
-
-    // ---- §8 step5/step6: model sizing+density, then apply the decided visibility and render ----
-    resolveModelVisibility(uiExclusionZones.concat(priorityLabelRects), ddayActive);
-    applyModelVisibility(ddayActive);
-    renderer.render(scene, camera);
-
+    return priorityLabelRects;
+  }
+  // Chapter indicator, event note, seek bar, elapsed-time readout, and the end-card fade — the controls
+  // section below the map. `text` is the date/clock string updateHudText already derived.
+  function updateControls(ms, text) {
     const chapterIdx = Math.max(
       0,
       CHAPTERS.findLastIndex((c) => c.ms <= ms),
@@ -2127,6 +2120,46 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       $("end").setAttribute("aria-hidden", String(!endVis));
       lastEnd = endVis;
     }
+  }
+
+  // frame(sec) rebuilds display state from the playhead position sec: not a pure function (it mutates
+  // shared scene/DOM/module state on every call), but deterministic in the sense that every value it
+  // writes is re-derived from sec each time, never accumulated from prior frames. The one exception is
+  // the camera's live azimuth/elevation/zoom, which are the user's own drag/wheel/keyboard input
+  // (userAzimuth/userElevation/userZoom/topDown, read via currentCameraParams) and are intentionally
+  // independent of the playhead.
+  function frame(sec) {
+    currentSec = T.MathUtils.clamp(sec, 0, total);
+    drawn = true;
+    const ms = dateFromSec(currentSec);
+    const eastState = frontStateAt(eastKeyframes, ms);
+    const westActive = ms >= westStartMs;
+    const westState = westActive ? frontStateAt(westKeyframes, Math.min(ms, westEndMs)) : null;
+    const ddayActive = ms >= ddayStartMs && ms < ddayEndMs;
+    // Action phase (boat/plane motion) is driven by playback seconds within the D-Day span, not by the
+    // historical-time ratio: dateFromSec is piecewise-linear across the inserted D-Day nodes, so a
+    // time-ratio here would desync the landing motion from the clock it is timed against.
+    const ddayU = ddayActive
+      ? T.MathUtils.clamp((currentSec - ddayStartSec) / (ddayEndSec - ddayStartSec), 0, 1)
+      : null;
+
+    // 1) camera, 2) regular-model and detail-scene positions/visibility candidates.
+    const cam = updateCamera(ms);
+    placeRegularModels(ms, eastState, westState, westActive, ddayActive);
+    updateDetailScene(ms, ddayActive, ddayU);
+
+    world.updateMatrixWorld(true); // parent/child world matrices current before any projection below
+
+    // 3) HUD text, 4) priority labels (measured before model density is resolved).
+    const text = updateHudText(ms, ddayActive);
+    const priorityLabelRects = placePriorityLabels(ms, cam, eastState, westActive, ddayActive);
+
+    // 5) model sizing+density decision, applied, 6) rendered.
+    resolveModelVisibility(uiExclusionZones.concat(priorityLabelRects), ddayActive);
+    applyModelVisibility(ddayActive);
+    renderer.render(scene, camera);
+
+    updateControls(ms, text);
   }
 
   function resize() {
