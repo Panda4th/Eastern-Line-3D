@@ -482,6 +482,21 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       new T.MeshStandardMaterial({ color, roughness: 0.75 }),
     );
   }
+  // R7: east and west build identical city-label/pin pairs from their own city list.
+  function buildCityLabels(cities) {
+    return cities.map((c, i) => {
+      const p = ll([c[1], c[2]]);
+      const pin = new T.Mesh(gPin, mPin);
+      pin.position.copy(p);
+      pin.position.y = 0.12;
+      world.add(pin);
+      const el = document.createElement("span");
+      el.className = "city";
+      el.textContent = c[0];
+      labels.append(el);
+      return { el, p, i };
+    });
+  }
 
   // ================= EAST FRONT (1941-06-22 -> 1945-05-09, unchanged front-line data) =================
   const eastKeyframes = prepFront(D.east.keyframes);
@@ -508,18 +523,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   // R5: mover.userData.order never changes after construction, so fix the candidate-priority order here
   // once instead of re-sorting eastArrows every resolveModelVisibility() call (i.e. every frame).
   const eastArrowsByOrder = [...eastArrows].sort((a, b) => a.mover.userData.order - b.mover.userData.order);
-  const eastCityLabels = D.east.cities.map((c, i) => {
-    const p = ll([c[1], c[2]]);
-    const pin = new T.Mesh(gPin, mPin);
-    pin.position.copy(p);
-    pin.position.y = 0.12;
-    world.add(pin);
-    const el = document.createElement("span");
-    el.className = "city";
-    el.textContent = c[0];
-    labels.append(el);
-    return { el, p, i };
-  });
+  const eastCityLabels = buildCityLabels(D.east.cities);
   const seaLabels = [
     ["バルト海", [19, 57.3]],
     ["黒海", [32, 43.8]],
@@ -564,6 +568,11 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   // R5: same fixed-order precomputation as eastArrowsByOrder above.
   const pocketsByOrder = [...pockets].sort((a, b) => a.unit.userData.order - b.unit.userData.order);
 
+  // R7: the regular-tank site count per front is used both to build each front's troops and, per frame,
+  // to map a site index back onto that frame's front-line sample points; shared here so the two stay in
+  // sync instead of repeating 22/16 at both call sites.
+  const EAST_TROOP_SITES = 22,
+    WEST_TROOP_SITES = 16;
   // ---- §5.1 regular-tank candidate order: center-out breadth-first over front-line site indices, sites
   // visited earlier alternate which side is processed first, east front's sites precede west's ----
   function bfsCenterOrder(n) {
@@ -598,7 +607,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     return troops;
   }
   const eastTroops = buildTroops(
-    22,
+    EAST_TROOP_SITES,
     ["de", "su"],
     (side) => (side === "de" ? matDe : matSu),
     (side) => (side === "de" ? sideDe : sideSu),
@@ -608,20 +617,9 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   const westKeyframes = prepFront(D.west.keyframes);
   const westStartMs = westKeyframes[0].ms,
     westEndMs = westKeyframes.at(-1).ms;
-  const westCityLabels = D.west.cities.map((c, i) => {
-    const p = ll([c[1], c[2]]);
-    const pin = new T.Mesh(gPin, mPin);
-    pin.position.copy(p);
-    pin.position.y = 0.12;
-    world.add(pin);
-    const el = document.createElement("span");
-    el.className = "city";
-    el.textContent = c[0];
-    labels.append(el);
-    return { el, p, i };
-  });
+  const westCityLabels = buildCityLabels(D.west.cities);
   const westTroops = buildTroops(
-    16,
+    WEST_TROOP_SITES,
     ["de", "wa"],
     (side) => (side === "de" ? matDe : matWa),
     (side) => (side === "de" ? sideDe : sideWa),
@@ -1373,33 +1371,26 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       dc.lineCap = "round";
       dc.stroke();
     };
+    // R7: east and west draw the same band (DE side always black, fill .65/stroke .05/.43 widths shared)
+    // against their own front and their own "other side" color; only that color pair and the front
+    // itself differ between the two calls below.
     // §8/R1: model placement calls eastOffset(dir)/westOffset(dir) once per model (44+32 calls in a
     // normal two-front frame), but dir is always -1 or 1, so each front only ever needs two distinct
     // offset arrays per frame. Memoize per direction here instead of re-mapping every front point on
-    // every call; the cache is a fresh local each drawOverlay() call, so it never survives past this
+    // every call; the cache is local to this drawFrontBand() call, so it never survives past this
     // frame or leaks across east/west.
-    let eastOffset = null,
-      westOffset = null;
-    if (eastFront) {
-      fill(eastFront, -1, "rgba(17,19,24,.19)");
-      fill(eastFront, 1, "rgba(201,37,53,.16)");
-      stroke(eastFront, "rgba(255,255,255,.9)", 6);
-      stroke(offset(eastFront, -1, 0.05), "#111318", 2.9);
-      stroke(offset(eastFront, 1, 0.05), "#c92535", 2.9);
-      let eastOffsetNeg = null,
-        eastOffsetPos = null;
-      eastOffset = (dir) => (dir < 0 ? (eastOffsetNeg ??= offset(eastFront, dir, 0.43)) : (eastOffsetPos ??= offset(eastFront, dir, 0.43)));
+    function drawFrontBand(front, otherFillColor, otherStrokeColor) {
+      fill(front, -1, "rgba(17,19,24,.19)");
+      fill(front, 1, otherFillColor);
+      stroke(front, "rgba(255,255,255,.9)", 6);
+      stroke(offset(front, -1, 0.05), "#111318", 2.9);
+      stroke(offset(front, 1, 0.05), otherStrokeColor, 2.9);
+      let offsetNeg = null,
+        offsetPos = null;
+      return (dir) => (dir < 0 ? (offsetNeg ??= offset(front, dir, 0.43)) : (offsetPos ??= offset(front, dir, 0.43)));
     }
-    if (westFront) {
-      fill(westFront, -1, "rgba(17,19,24,.19)");
-      fill(westFront, 1, "rgba(35,111,145,.16)");
-      stroke(westFront, "rgba(255,255,255,.9)", 6);
-      stroke(offset(westFront, -1, 0.05), "#111318", 2.9);
-      stroke(offset(westFront, 1, 0.05), "#236f91", 2.9);
-      let westOffsetNeg = null,
-        westOffsetPos = null;
-      westOffset = (dir) => (dir < 0 ? (westOffsetNeg ??= offset(westFront, dir, 0.43)) : (westOffsetPos ??= offset(westFront, dir, 0.43)));
-    }
+    const eastOffset = eastFront ? drawFrontBand(eastFront, "rgba(201,37,53,.16)", "#c92535") : null;
+    const westOffset = westFront ? drawFrontBand(westFront, "rgba(35,111,145,.16)", "#236f91") : null;
     // Faint invasion start line is a reference front, not a political boundary.
     dc.setLineDash([8, 10]);
     stroke(eastKeyframes[0].samples, "rgba(87,83,73,.38)", 1.5);
@@ -1885,6 +1876,23 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       for (const o of r.boats) o.visible = ddayActive && !!o.userData.eligible && !!o.userData.accepted;
     }
   }
+  // R7: east and west position/orient their regular tanks along their own front the same way, differing
+  // only in site count, which front/offset function to read, and the eligibility condition (end-of-front
+  // date, on-screen-only during the Normandy detail, etc.), which the caller supplies.
+  function placeTroopsOnFront(troops, siteCount, front, offsetFn, eligibleFor) {
+    for (const tr of troops) {
+      const j = Math.round(((tr.i + 0.5) / siteCount) * (front.length - 1)),
+        p = (tr.side === "de" ? offsetFn(-1) : offsetFn(1))[j];
+      tr.obj.position.copy(p);
+      tr.obj.position.y = 0.07;
+      const q = front[Math.min(j + 1, front.length - 1)].clone().sub(front[Math.max(0, j - 1)]);
+      const n = new T.Vector3(q.z, 0, -q.x).normalize().multiplyScalar(tr.side === "de" ? 1 : -1);
+      tr.obj.rotation.y = -Math.atan2(n.z, n.x);
+      const px = (p.x / MW + 0.5) * CW,
+        py = (p.z / MH + 0.5) * CH;
+      tr.eligible = eligibleFor(p, px, py);
+    }
+  }
 
   function frame(sec) {
     currentSec = T.MathUtils.clamp(sec, 0, total);
@@ -1917,38 +1925,25 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
 
     // ---- §8 step1: candidate positions/rotations. `.eligible` records existing land/time/scene gating;
     // final `.visible` is decided once, later, by resolveModelVisibility/applyModelVisibility (§3/§5.2). ----
-    for (const tr of eastTroops) {
-      const f = eastState.front,
-        j = Math.round(((tr.i + 0.5) / 22) * (f.length - 1)),
-        p = (tr.side === "de" ? eastOffset(-1) : eastOffset(1))[j];
-      tr.obj.position.copy(p);
-      tr.obj.position.y = 0.07;
-      const q = f[Math.min(j + 1, f.length - 1)].clone().sub(f[Math.max(0, j - 1)]);
-      const n = new T.Vector3(q.z, 0, -q.x).normalize().multiplyScalar(tr.side === "de" ? 1 : -1);
-      tr.obj.rotation.y = -Math.atan2(n.z, n.x);
-      const px = (p.x / MW + 0.5) * CW,
-        py = (p.z / MH + 0.5) * CH;
-      // §3: during the Normandy detail, east-front candidates are limited to what's on-screen.
-      tr.eligible = ms < eastEndMs && mc.isPointInPath(landPath, px, py) && (!ddayActive || onScreenApprox(p));
-    }
+    // §3: during the Normandy detail, east-front candidates are limited to what's on-screen.
+    placeTroopsOnFront(
+      eastTroops,
+      EAST_TROOP_SITES,
+      eastState.front,
+      eastOffset,
+      (p, px, py) => ms < eastEndMs && mc.isPointInPath(landPath, px, py) && (!ddayActive || onScreenApprox(p)),
+    );
 
     // §3: the Normandy detail replaces the broad-view western front entirely.
     for (const tr of westTroops) tr.eligible = false;
     if (westActive && !ddayActive) {
-      const f = westState.front,
-        off = westOffset;
-      for (const tr of westTroops) {
-        const j = Math.round(((tr.i + 0.5) / 16) * (f.length - 1)),
-          p = (tr.side === "de" ? off(-1) : off(1))[j];
-        tr.obj.position.copy(p);
-        tr.obj.position.y = 0.07;
-        const q = f[Math.min(j + 1, f.length - 1)].clone().sub(f[Math.max(0, j - 1)]);
-        const n = new T.Vector3(q.z, 0, -q.x).normalize().multiplyScalar(tr.side === "de" ? 1 : -1);
-        tr.obj.rotation.y = -Math.atan2(n.z, n.x);
-        const px = (p.x / MW + 0.5) * CW,
-          py = (p.z / MH + 0.5) * CH;
-        tr.eligible = ms < westEndMs + 86400000 && mc.isPointInPath(landPath, px, py);
-      }
+      placeTroopsOnFront(
+        westTroops,
+        WEST_TROOP_SITES,
+        westState.front,
+        westOffset,
+        (p, px, py) => ms < westEndMs + 86400000 && mc.isPointInPath(landPath, px, py),
+      );
     }
 
     for (const a of eastArrows) {
