@@ -92,7 +92,15 @@ const matDe=new T.MeshStandardMaterial({color:COLOR_DE,roughness:.68}),matSu=new
 const sideDe=new T.MeshStandardMaterial({color:0x40444b,roughness:1}),sideSu=new T.MeshStandardMaterial({color:0x841e29,roughness:1}),sideWa=new T.MeshStandardMaterial({color:0x1c5872,roughness:1});
 const mPin=new T.MeshStandardMaterial({color:0x555b58});
 const gBody=new T.BoxGeometry(.63,.22,.39),gTrack=new T.BoxGeometry(.7,.16,.13),gTurret=new T.BoxGeometry(.30,.16,.26),gGun=new T.BoxGeometry(.44,.055,.055),gHead=new T.ConeGeometry(.30,.68,4),gPin=new T.CylinderGeometry(.075,.075,.15,10);
-function tank(mat,track){const g=new T.Group();const box=(x,y,z,geo,m)=>{const o=new T.Mesh(geo,m);o.position.set(x,y,z);g.add(o)};box(0,.13,0,gBody,mat);box(0,.075,-.25,gTrack,track);box(0,.075,.25,gTrack,track);box(-.04,.31,0,gTurret,mat);box(.29,.34,0,gGun,mat);return g}
+
+// ---- §4 visibility/sizing config: base scale multipliers (applied on top of any pre-existing per-object
+// multiplier, e.g. the pocket units' .7) and screen-space max-longest-side caps, in CSS px ----
+// §5.2: inflatePx is the per-rect margin (3px) added to each side before testing intersection — inflating
+// both sides of a model-model pair yields the spec's 6px minimum gap; a model-vs-label/UI test inflates
+// only the model rect, per §5.2's "ラベルとUIに対しては模型矩形側のみ3 CSS px拡張する".
+const VISUAL_CONFIG={tank:{scale:.65,maxPx:24},plane:{scale:.65,maxPx:30},craft:{scale:.65,maxPx:24},defense:{scale:1,maxPx:18},inflatePx:3};
+function markVisual(obj,kind){obj.updateMatrixWorld(true);obj.userData.kind=kind;obj.userData.localBox=new T.Box3().setFromObject(obj);return obj}
+function tank(mat,track){const g=new T.Group();const box=(x,y,z,geo,m)=>{const o=new T.Mesh(geo,m);o.position.set(x,y,z);g.add(o)};box(0,.13,0,gBody,mat);box(0,.075,-.25,gTrack,track);box(0,.075,.25,gTrack,track);box(-.04,.31,0,gTurret,mat);box(.29,.34,0,gGun,mat);return markVisual(g,'tank')}
 
 // ---- Timekeeping helpers (dates are compared as ms, never re-derived from playback history) ----
 const msOf=date=>Date.parse(date+(date.includes('T')?'':'T00:00:00')+'Z');
@@ -104,18 +112,30 @@ function addLine(pts,color,radius=.025){const curve=new T.CatmullRomCurve3(pts);
 // ================= EAST FRONT (1941-06-22 -> 1945-05-09, unchanged front-line data) =================
 const eastKeyframes=prepFront(D.east.keyframes);
 const eastEndMs=eastKeyframes.at(-1).ms;
-const eastArrows=D.east.arrows.map(a=>{const p=a.pts.map(ll);p.forEach((v,i)=>v.y=.2+(i===1?.55:0));const curve=new T.CatmullRomCurve3(p),g=new T.Group(),color=a.side==='de'?COLOR_DE:COLOR_SU;world.add(g);const tube=new T.Mesh(new T.TubeGeometry(curve,60,.09,6,false),new T.MeshStandardMaterial({color,roughness:.7}));g.add(tube);const head=new T.Mesh(gHead,a.side==='de'?matDe:matSu);g.add(head);const mover=tank(a.side==='de'?matDe:matSu,a.side==='de'?sideDe:sideSu);g.add(mover);return {...a,curve,g,tube,head,mover,startMs:msOf(a.start),endMs:msOf(a.end)}});
+const eastArrows=D.east.arrows.map((a,order)=>{const p=a.pts.map(ll);p.forEach((v,i)=>v.y=.2+(i===1?.55:0));const curve=new T.CatmullRomCurve3(p),g=new T.Group(),color=a.side==='de'?COLOR_DE:COLOR_SU;world.add(g);const tube=new T.Mesh(new T.TubeGeometry(curve,60,.09,6,false),new T.MeshStandardMaterial({color,roughness:.7}));g.add(tube);const head=new T.Mesh(gHead,a.side==='de'?matDe:matSu);g.add(head);const mover=tank(a.side==='de'?matDe:matSu,a.side==='de'?sideDe:sideSu);g.add(mover);mover.userData.order=order;return {...a,curve,g,tube,head,mover,startMs:msOf(a.start),endMs:msOf(a.end)}});
 const eastCityLabels=D.east.cities.map((c,i)=>{const p=ll([c[1],c[2]]);const pin=new T.Mesh(gPin,mPin);pin.position.copy(p);pin.position.y=.12;world.add(pin);const el=document.createElement('span');el.className='city';el.textContent=c[0];labels.append(el);return {el,p,i}});
 const seaLabels=[['バルト海',[19,57.3]],['黒海',[32,43.8]],['コーカサス',[43.4,42.6]]].map(([name,p])=>{const el=document.createElement('span');el.className='sea';el.textContent=name;labels.append(el);return {el,p:ll(p)}});
 const pocketG=new T.Group();world.add(pocketG);
-const pockets=[{name:'第6軍などの包囲',at:[44.2,48.75],start:'1942-11-23',end:'1943-02-02',rx:.44,rz:.34},{name:'クールラント',at:[22.1,56.9],start:'1944-10-10',end:'1945-05-09',rx:.73,rz:.50},{name:'東プロイセン',at:[20.3,54.5],start:'1945-02-01',end:'1945-04-25',rx:.55,rz:.35}].map(p=>{const pos=ll(p.at),pts=Array.from({length:65},(_,i)=>new T.Vector3(pos.x+Math.cos(i/64*Math.PI*2)*p.rx,.18,pos.z+Math.sin(i/64*Math.PI*2)*p.rz));const ring=addLine(pts,COLOR_SU,.038);pocketG.add(ring);const unit=tank(matDe,sideDe);unit.scale.setScalar(.7);unit.position.copy(pos);pocketG.add(unit);const el=document.createElement('span');el.className='pocket';el.textContent=p.name;labels.append(el);return {...p,pos,ring,unit,el,startMs:msOf(p.start),endMs:msOf(p.end)}});
-const eastTroops=[];for(let i=0;i<22;i++){for(const side of ['de','su']){const obj=tank(side==='de'?matDe:matSu,side==='de'?sideDe:sideSu);world.add(obj);eastTroops.push({obj,side,i})}}
+const pockets=[{name:'第6軍などの包囲',at:[44.2,48.75],start:'1942-11-23',end:'1943-02-02',rx:.44,rz:.34},{name:'クールラント',at:[22.1,56.9],start:'1944-10-10',end:'1945-05-09',rx:.73,rz:.50},{name:'東プロイセン',at:[20.3,54.5],start:'1945-02-01',end:'1945-04-25',rx:.55,rz:.35}].map((p,order)=>{const pos=ll(p.at),pts=Array.from({length:65},(_,i)=>new T.Vector3(pos.x+Math.cos(i/64*Math.PI*2)*p.rx,.18,pos.z+Math.sin(i/64*Math.PI*2)*p.rz));const ring=addLine(pts,COLOR_SU,.038);pocketG.add(ring);const unit=tank(matDe,sideDe);unit.scale.setScalar(.7);unit.position.copy(pos);unit.userData.order=order;pocketG.add(unit);const el=document.createElement('span');el.className='pocket';el.textContent=p.name;labels.append(el);return {...p,pos,ring,unit,el,startMs:msOf(p.start),endMs:msOf(p.end)}});
+
+// ---- §5.1 regular-tank candidate order: center-out breadth-first over front-line site indices, sites
+// visited earlier alternate which side is processed first, east front's sites precede west's ----
+function bfsCenterOrder(n){const order=[];const queue=[[0,n-1]];while(queue.length){const [lo,hi]=queue.shift();if(lo>hi)continue;const mid=lo+Math.floor((hi-lo)/2);order.push(mid);if(lo<=mid-1)queue.push([lo,mid-1]);if(mid+1<=hi)queue.push([mid+1,hi])}return order}
+function buildTroops(n,sides,matFor,trackFor){
+ const troops=[];for(let i=0;i<n;i++)for(const side of sides){const obj=tank(matFor(side),trackFor(side));world.add(obj);troops.push({obj,side,i})}
+ const bySite=i=>side=>troops.find(t=>t.i===i&&t.side===side);
+ let rank=0;
+ bfsCenterOrder(n).forEach((i,r)=>{const order=r%2===0?sides:[sides[1],sides[0]];for(const side of order){bySite(i)(side).order=rank++}});
+ return troops;
+}
+const eastTroops=buildTroops(22,['de','su'],side=>side==='de'?matDe:matSu,side=>side==='de'?sideDe:sideSu);
 
 // ================= WEST FRONT (active from 1944-06-06, shares the same clock as the east) =================
 const westKeyframes=prepFront(D.west.keyframes);
 const westStartMs=westKeyframes[0].ms, westEndMs=westKeyframes.at(-1).ms;
 const westCityLabels=D.west.cities.map((c,i)=>{const p=ll([c[1],c[2]]);const pin=new T.Mesh(gPin,mPin);pin.position.copy(p);pin.position.y=.12;world.add(pin);const el=document.createElement('span');el.className='city';el.textContent=c[0];labels.append(el);return {el,p,i}});
-const westTroops=[];for(let i=0;i<16;i++){for(const side of ['de','wa']){const obj=tank(side==='de'?matDe:matWa,side==='de'?sideDe:sideWa);world.add(obj);westTroops.push({obj,side,i})}}
+const westTroops=buildTroops(16,['de','wa'],side=>side==='de'?matDe:matWa,side=>side==='de'?sideDe:sideWa);
+westTroops.forEach(t=>t.order+=eastTroops.length); // §5.1: east front's sites precede west's in the fixed order
 
 // ================= NORMANDY DETAIL (pre-built once; only visibility/transform change afterwards) =================
 const normandyGroup=new T.Group();world.add(normandyGroup);
@@ -129,19 +149,19 @@ function ndLabel(text,p,cls,dy=0,anchor=null){const el=document.createElement('s
 function ndLine(points,color,opacity=1,dashed=false){const geo=new T.BufferGeometry().setFromPoints(points);const mat=dashed?new T.LineDashedMaterial({color,transparent:true,opacity,dashSize:.2,gapSize:.15}):new T.LineBasicMaterial({color,transparent:true,opacity});const obj=new T.Line(geo,mat);if(dashed)obj.computeLineDistances();normandyGroup.add(obj);return obj}
 function ndRing(pos,color,radius){const obj=new T.Mesh(new T.RingGeometry(radius-.04,radius,64),new T.MeshBasicMaterial({color,transparent:true,opacity:.85,side:T.DoubleSide}));obj.rotation.x=-Math.PI/2;obj.position.copy(pos);obj.position.y=.13;normandyGroup.add(obj);return obj}
 function ndBox(w,h,d,color,x=0,y=0,z=0){const obj=new T.Mesh(new T.BoxGeometry(w,h,d),new T.MeshStandardMaterial({color,roughness:.8}));obj.position.set(x,y,z);return obj}
-function craft(){const g=new T.Group();g.add(ndBox(.30,.14,.65,BLUE,0,.10));g.add(ndBox(.25,.10,.13,0xb8c9c8,0,.2,-.18));g.add(ndBox(.29,.04,.10,0x375361,0,.14,.32));normandyGroup.add(g);return g}
-function plane(){const g=new T.Group();g.add(ndBox(.12,.08,.75,GREEN));g.add(ndBox(.83,.045,.14,GREEN,0,0,.06));g.add(ndBox(.34,.035,.09,GREEN,0,0,-.28));normandyGroup.add(g);return g}
-const ndRoutes=D.normandy.beaches.map(b=>{
+function craft(){const g=new T.Group();g.add(ndBox(.30,.14,.65,BLUE,0,.10));g.add(ndBox(.25,.10,.13,0xb8c9c8,0,.2,-.18));g.add(ndBox(.29,.04,.10,0x375361,0,.14,.32));normandyGroup.add(g);return markVisual(g,'craft')}
+function plane(){const g=new T.Group();g.add(ndBox(.12,.08,.75,GREEN));g.add(ndBox(.83,.045,.14,GREEN,0,0,.06));g.add(ndBox(.34,.035,.09,GREEN,0,0,-.28));normandyGroup.add(g);return markVisual(g,'plane')}
+const ndRoutes=D.normandy.beaches.map((b,beachOrder)=>{
  const end=coast(b.at),start=ll(b.sea),direction=end.clone().sub(start).setY(0).normalize();
  const path=ndLine([start,end],BLUE,.3);
  const arrow=new T.ArrowHelper(direction,start,start.distanceTo(end),BLUE,.48,.25);normandyGroup.add(arrow);
- const boats=Array.from({length:3},()=>craft());
+ const boats=Array.from({length:3},(_,i)=>{const o=craft();o.userData.i=i;return o});
  const marker=ndRing(end,BLUE,.48);const anchor=ll(b.label);const label=ndLabel(b.name+' / '+b.force,anchor,'beach',-14,end);
  // The black symbol denotes a defended sector, not an individual mapped bunker.
- const defense=ndBox(.45,.22,.30,BLACK);defense.position.copy(end).addScaledVector(direction,.38);defense.position.y=.14;normandyGroup.add(defense);
- return {...b,start,end,direction,path,arrow,boats,marker,label};
+ const defense=ndBox(.45,.22,.30,BLACK);defense.position.copy(end).addScaledVector(direction,.38);defense.position.y=.14;normandyGroup.add(defense);markVisual(defense,'defense');defense.userData.order=beachOrder;
+ return {...b,beachOrder,start,end,direction,path,arrow,boats,marker,label,defense};
 });
-const ndAir=D.normandy.drops.map(d=>{const p=ll(d.at),a=ll(d.from);a.y=1.8;const mid=a.clone().lerp(p,.6);mid.y=2.2;const curve=new T.QuadraticBezierCurve3(a,mid,p.clone().setY(.4));const path=ndLine(curve.getPoints(60),GREEN,.7,true),obj=plane();const marker=ndLine(Array.from({length:65},(_,i)=>new T.Vector3(p.x+Math.cos(i/64*Math.PI*2)*.65,.12,p.z+Math.sin(i/64*Math.PI*2)*.65)),GREEN,.8,true);const label=ndLabel(d.name,ll(d.label),'airborne',15,p);return {p,curve,path,obj,marker,label}});
+const ndAir=D.normandy.drops.map((d,order)=>{const p=ll(d.at),a=ll(d.from);a.y=1.8;const mid=a.clone().lerp(p,.6);mid.y=2.2;const curve=new T.QuadraticBezierCurve3(a,mid,p.clone().setY(.4));const path=ndLine(curve.getPoints(60),GREEN,.7,true),obj=plane();obj.userData.order=order;const marker=ndLine(Array.from({length:65},(_,i)=>new T.Vector3(p.x+Math.cos(i/64*Math.PI*2)*.65,.12,p.z+Math.sin(i/64*Math.PI*2)*.65)),GREEN,.8,true);const label=ndLabel(d.name,ll(d.label),'airborne',15,p);return {p,curve,path,obj,marker,label}});
 const ndBombardments=ndRoutes.map((r,i)=>{const start=r.start.clone().lerp(r.end,.5);start.y=.15;const mid=start.clone().lerp(r.end,.5);mid.y=1.7;const curve=new T.QuadraticBezierCurve3(start,mid,r.end);const path=ndLine(curve.getPoints(40),0x9e743d,.55),dot=new T.Mesh(new T.SphereGeometry(.065,8,8),new T.MeshBasicMaterial({color:0xc19345}));normandyGroup.add(dot);return {curve,path,dot}});
 ndLabel('英仏海峡',ll([-.73,49.90]),'sea');
 ndLabel('コタンタン半島',ll([-1.55,49.62]),'sea');
@@ -400,7 +420,7 @@ const ndLabelPriority={beach:0,airborne:1,sea:2,city:3};
 const beachOffsets=[0,-24,24,-48,48,-72,72,-96,96,-120,120,-144,144];
 const beachFallbackEl=$('beach-fallback');
 function placeNormandyLabels(){
- lc.clearRect(0,0,stageW,stageH);const used=[],margin=8,unplacedBeaches=[];
+ lc.clearRect(0,0,stageW,stageH);const used=[],margin=8,unplacedBeaches=[],modelExclusion=[];
  const project=p=>{const q=p.clone().setY(.4);world.localToWorld(q);return q.project(camera)};
  for(const item of [...ndPlaceLabels].sort((a,b)=>ndLabelPriority[a.cls]-ndLabelPriority[b.cls])){
   const q=project(item.p);item.el.style.visibility='hidden';
@@ -417,11 +437,14 @@ function placeNormandyLabels(){
   }
   if(!placed){if(item.cls==='beach')unplacedBeaches.push(item.el.textContent);continue}
   item.el.style.left=placed.x+'px';item.el.style.top=placed.y+'px';item.el.style.visibility='visible';used.push(placed.rect);
+  // §7: placed beach/airborne label rects feed the model-side exclusion zones (city/sea labels are excluded from this requirement).
+  if(item.cls==='beach'||item.cls==='airborne')modelExclusion.push(placed.rect);
   if(item.anchor){const p=project(item.anchor);if(Math.abs(p.x)<=1&&Math.abs(p.y)<=1){lc.strokeStyle=item.cls==='beach'?'#68868e':'#758b55';lc.lineWidth=1;lc.beginPath();lc.moveTo((p.x*.5+.5)*stageW,(-p.y*.5+.5)*stageH);lc.lineTo(placed.x,placed.y);lc.stroke()}}
  }
  // Design doc §7: an unplaced beach name is never simply dropped — list it below the map instead.
  if(unplacedBeaches.length){beachFallbackEl.textContent='地図に収まらない上陸海岸名：'+unplacedBeaches.join('・');beachFallbackEl.hidden=false}
  else beachFallbackEl.hidden=true;
+ return modelExclusion;
 }
 
 // ================= Single frame(sec): pure function of the playhead, no history-dependent state =================
@@ -483,6 +506,140 @@ let userAzimuth=null,userElevation=null,userZoom=1,topDown=false;
 function setTopDown(v){if(topDown===v)return;topDown=v;$('view').textContent=topDown?'斜めから見る':'真上から見る'}
 function currentCameraParams(ms){const cam=cameraStateAt(ms);return {target:cam.target,distance:cam.distance*userZoom,azimuth:userAzimuth===null?cam.azimuth:userAzimuth,elevation:topDown?1.5:(userElevation===null?cam.elevation:userElevation)}}
 
+// ================= §4/§5 visibility & density engine =================
+// Shared by every 3D "model" candidate (regular/arrow/pocket tanks, planes, landing craft, defense
+// points). Markers, rings, paths and arrows themselves are not candidates and are left untouched.
+const _pv=new T.Vector3(),_pvCam=new T.Vector3();
+function rectsCollide(a,b){return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y}
+function inflateRect(r,px){return {x:r.x-px,y:r.y-px,w:r.w+px*2,h:r.h+px*2}}
+function clipToStage(r){const x0=Math.max(0,r.x),y0=Math.max(0,r.y),x1=Math.min(stageW,r.x+r.w),y1=Math.min(stageH,r.y+r.h);return {x:x0,y:y0,w:Math.max(0,x1-x0),h:Math.max(0,y1-y0)}}
+const BOX3_CORNERS=[[0,0,0],[1,0,0],[0,1,0],[1,1,0],[0,0,1],[1,0,1],[0,1,1],[1,1,1]];
+// §4.2: projects the model's saved local bounding box (base scale + current position/rotation/parent
+// transform) to a screen-space rect, including any portion outside the viewport. Returns null when any
+// corner fails the near-plane test (still in front of the near clip plane), so the frame skips the model.
+function projectBoxScreenRect(obj){
+ const box=obj.userData.localBox;if(!box||box.isEmpty())return null;
+ obj.updateMatrixWorld(true);
+ let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+ for(const c of BOX3_CORNERS){
+  _pv.set(c[0]?box.max.x:box.min.x,c[1]?box.max.y:box.min.y,c[2]?box.max.z:box.min.z).applyMatrix4(obj.matrixWorld);
+  _pvCam.copy(_pv).applyMatrix4(camera.matrixWorldInverse);
+  if(_pvCam.z>-camera.near)return null;
+  _pv.project(camera);
+  const x=(_pv.x*.5+.5)*stageW,y=(-_pv.y*.5+.5)*stageH;
+  if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;
+ }
+ return {x:minX,y:minY,w:maxX-minX,h:maxY-minY};
+}
+// §4.1: base scale is captured once from whatever scale the object already carried at construction
+// (e.g. the pocket units' .7), never re-derived from a later frame's dynamically-shrunk value.
+function ensureBaseScale(obj,cfg){if(obj.userData.baseScale===undefined)obj.userData.baseScale=obj.scale.x*cfg.scale}
+// §4.2: initial guess min(1,Lmax/L), then up to 12 bisection steps over [0,thatScale] taking the passing side.
+function findModelScale(obj,cfg){
+ obj.updateMatrixWorld(true);_pv.setFromMatrixPosition(obj.matrixWorld);_pvCam.copy(_pv).applyMatrix4(camera.matrixWorldInverse);
+ if(_pvCam.z>-camera.near)return null; // model origin itself not beyond the near plane: no scale can fix it
+ const base=obj.userData.baseScale;
+ const measure=scale=>{obj.scale.setScalar(scale);return projectBoxScreenRect(obj)};
+ let rect=measure(base),L=rect?Math.max(rect.w,rect.h):Infinity;
+ if(rect&&L<=cfg.maxPx)return {scale:base,rect};
+ const hi0=isFinite(L)?base*Math.min(1,cfg.maxPx/L):base;
+ let rectHi=measure(hi0),LHi=rectHi?Math.max(rectHi.w,rectHi.h):Infinity;
+ if(rectHi&&LHi<=cfg.maxPx)return {scale:hi0,rect:rectHi};
+ let lo=0,hi=hi0,loRect=null;
+ for(let i=0;i<12;i++){const mid=(lo+hi)/2,r=measure(mid),l=r?Math.max(r.w,r.h):Infinity;if(r&&l<=cfg.maxPx){lo=mid;loRect=r}else hi=mid}
+ if(!loRect)return null;
+ // measure() above may have left matrixWorld at the last *tested* mid, not at `lo` — resync before returning.
+ obj.scale.setScalar(lo);obj.updateMatrixWorld(true);
+ return {scale:lo,rect:loRect};
+}
+// §5.2 step4: accept iff it fits size-wise, avoids exclusion zones (label/UI rects, 3px model-side margin
+// only) and avoids already-accepted models (both sides get the 3px margin, i.e. a 6px minimum gap).
+function tryAcceptModel(obj,cfg,usedRects,exclusionRects){
+ const found=findModelScale(obj,cfg);
+ if(!found){obj.userData.accepted=false;return false}
+ const inflated=inflateRect(clipToStage(found.rect),VISUAL_CONFIG.inflatePx);
+ for(const ex of exclusionRects)if(rectsCollide(inflated,ex)){obj.userData.accepted=false;return false}
+ for(const u of usedRects)if(rectsCollide(inflated,u)){obj.userData.accepted=false;return false}
+ usedRects.push(inflated);obj.userData.accepted=true;
+ return true;
+}
+// §3: an east-front regular tank is only a candidate during the Normandy detail if it is on-screen.
+function onScreenApprox(p){_pv.copy(p);world.localToWorld(_pv);_pv.project(camera);return _pv.z<1&&_pv.z>-1&&Math.abs(_pv.x)<=1&&Math.abs(_pv.y)<=1}
+// A placed label's rect for model exclusion (labels are center-anchored via CSS transform:translate(-50%,-50%)).
+function labelRect(el){
+ if(el.style.visibility==='hidden'||el.style.display==='none')return null;
+ const w=el.offsetWidth,h=el.offsetHeight;if(!w||!h)return null;
+ const cx=parseFloat(el.style.left),cy=parseFloat(el.style.top);
+ if(!isFinite(cx)||!isFinite(cy))return null;
+ return {x:cx-w/2,y:cy-h/2,w,h};
+}
+// §6.1: remaining playback time until a boat reaches the coast this frame, from the same start/arrival
+// (initial wave) or cycle (subsequent waves) timing the existing motion code already uses.
+function boatState(r,i,t){
+ const start=18+i*1.5,arrival=r.landing+i*2.5;
+ let eligible=t>=start&&t<=arrival+2,remaining=Math.max(0,arrival-t),progress=T.MathUtils.clamp((t-start)/(arrival-start),0,1);
+ if(t>=62+i*3&&t<100){const cycle=(t-62-i*3)%16;progress=Math.min(1,cycle/12);eligible=cycle<=13;remaining=cycle<=12?Math.max(0,12-cycle):0}
+ return {eligible,remaining,progress};
+}
+// §5.2/§7: the single decision pass. Fixed priority order: planes, each beach's representative landing
+// craft, pocket tanks, arrow-riding tanks, defense points, additional landing craft, regular tanks
+// (§5.1 order). Same used-rect set spans every type and both sides.
+function resolveModelVisibility(exclusionRects,ddayActive){
+ const usedRects=[];
+ if(ddayActive){
+  const planes=ndAir.filter(d=>d.obj.userData.eligible).sort((a,b)=>a.obj.userData.order-b.obj.userData.order);
+  for(const d of planes){ensureBaseScale(d.obj,VISUAL_CONFIG.plane);tryAcceptModel(d.obj,VISUAL_CONFIG.plane,usedRects,exclusionRects)}
+ }
+ if(ddayActive){
+  const cap=compactQuery.matches?1:3;
+  for(const r of [...ndRoutes].sort((a,b)=>a.beachOrder-b.beachOrder)){
+   const active=r.boats.filter(o=>o.userData.eligible).sort((a,b)=>a.userData.remaining-b.userData.remaining||a.userData.i-b.userData.i);
+   r._beachAccepted=0;r._beachCap=cap;r._repObj=null;
+   for(const cand of active){ensureBaseScale(cand,VISUAL_CONFIG.craft);if(tryAcceptModel(cand,VISUAL_CONFIG.craft,usedRects,exclusionRects)){r._repObj=cand;r._beachAccepted=1;break}}
+   r._extraCandidates=active.filter(o=>o!==r._repObj);
+  }
+ }
+ {
+  const cands=pockets.filter(p=>p.unit.userData.eligible).sort((a,b)=>a.unit.userData.order-b.unit.userData.order);
+  for(const p of cands){ensureBaseScale(p.unit,VISUAL_CONFIG.tank);tryAcceptModel(p.unit,VISUAL_CONFIG.tank,usedRects,exclusionRects)}
+ }
+ {
+  const cands=eastArrows.filter(a=>a.mover.userData.eligible).sort((a,b)=>a.mover.userData.order-b.mover.userData.order);
+  for(const a of cands){ensureBaseScale(a.mover,VISUAL_CONFIG.tank);tryAcceptModel(a.mover,VISUAL_CONFIG.tank,usedRects,exclusionRects)}
+ }
+ if(ddayActive){
+  const cands=ndRoutes.filter(r=>r.defense.userData.eligible).sort((a,b)=>a.defense.userData.order-b.defense.userData.order);
+  for(const r of cands){ensureBaseScale(r.defense,VISUAL_CONFIG.defense);tryAcceptModel(r.defense,VISUAL_CONFIG.defense,usedRects,exclusionRects)}
+ }
+ if(ddayActive){
+  const cands=[];
+  for(const r of ndRoutes)for(const o of (r._extraCandidates||[]))cands.push({r,o});
+  cands.sort((a,b)=>a.r.beachOrder-b.r.beachOrder||a.o.userData.i-b.o.userData.i);
+  for(const {r,o} of cands){
+   if(r._beachAccepted>=r._beachCap)continue; // §6.1: per-beach cap applies to accepted count, not candidate truncation
+   ensureBaseScale(o,VISUAL_CONFIG.craft);
+   if(tryAcceptModel(o,VISUAL_CONFIG.craft,usedRects,exclusionRects))r._beachAccepted++;
+  }
+ }
+ {
+  const cands=[...eastTroops,...westTroops].filter(tr=>tr.eligible).sort((a,b)=>a.order-b.order);
+  for(const tr of cands){ensureBaseScale(tr.obj,VISUAL_CONFIG.tank);tryAcceptModel(tr.obj,VISUAL_CONFIG.tank,usedRects,exclusionRects)}
+ }
+}
+// §5.2 step5/§3: the sole place `.visible` is written for every density-controlled model, so no later
+// loop can re-open something this pass closed. `eligible` gates candidacy; `accepted` gates the fit.
+function applyModelVisibility(ddayActive){
+ for(const tr of eastTroops)tr.obj.visible=!!tr.eligible&&!!tr.obj.userData.accepted;
+ for(const tr of westTroops)tr.obj.visible=!!tr.eligible&&!!tr.obj.userData.accepted;
+ for(const a of eastArrows)a.mover.visible=!!a.mover.userData.eligible&&!!a.mover.userData.accepted;
+ for(const p of pockets)p.unit.visible=!!p.unit.userData.eligible&&!!p.unit.userData.accepted;
+ for(const d of ndAir)d.obj.visible=ddayActive&&!!d.obj.userData.eligible&&!!d.obj.userData.accepted;
+ for(const r of ndRoutes){
+  r.defense.visible=ddayActive&&!!r.defense.userData.eligible&&!!r.defense.userData.accepted;
+  for(const o of r.boats)o.visible=ddayActive&&!!o.userData.eligible&&!!o.userData.accepted;
+ }
+}
+
 function frame(sec){
  currentSec=T.MathUtils.clamp(sec,0,total);drawn=true;
  const ms=dateFromSec(currentSec);
@@ -495,6 +652,7 @@ function frame(sec){
  // time-ratio here would desync the landing motion from the clock it is timed against.
  const ddayU=ddayActive?T.MathUtils.clamp((currentSec-ddayStartSec)/(ddayEndSec-ddayStartSec),0,1):null;
 
+ // ---- §8 step2: camera ----
  const cam=currentCameraParams(ms);
  const dist=cam.distance*Math.max(1,1.6/camera.aspect);
  const camPos=new T.Vector3(Math.sin(cam.azimuth)*Math.cos(cam.elevation)*dist,Math.sin(cam.elevation)*dist,Math.cos(cam.azimuth)*Math.cos(cam.elevation)*dist).add(cam.target);
@@ -502,58 +660,69 @@ function frame(sec){
 
  const {eastOffset,westOffset}=drawOverlay(eastState.front,westActive?westState.front:null);
 
+ // ---- §8 step1: candidate positions/rotations. `.eligible` records existing land/time/scene gating;
+ // final `.visible` is decided once, later, by resolveModelVisibility/applyModelVisibility (§3/§5.2). ----
  for(const tr of eastTroops){const f=eastState.front,j=Math.round((tr.i+0.5)/22*(f.length-1)),p=(tr.side==='de'?eastOffset(-1):eastOffset(1))[j];tr.obj.position.copy(p);tr.obj.position.y=.07;
   const q=f[Math.min(j+1,f.length-1)].clone().sub(f[Math.max(0,j-1)]);const n=new T.Vector3(q.z,0,-q.x).normalize().multiplyScalar(tr.side==='de'?1:-1);tr.obj.rotation.y=-Math.atan2(n.z,n.x);
-  const px=(p.x/MW+.5)*CW,py=(p.z/MH+.5)*CH;tr.obj.visible=ms<eastEndMs&&mc.isPointInPath(landPath,px,py);}
+  const px=(p.x/MW+.5)*CW,py=(p.z/MH+.5)*CH;
+  // §3: during the Normandy detail, east-front candidates are limited to what's on-screen.
+  tr.eligible=ms<eastEndMs&&mc.isPointInPath(landPath,px,py)&&(!ddayActive||onScreenApprox(p));}
 
- for(const tr of westTroops){tr.obj.visible=false}
- if(westActive){const f=westState.front,off=westOffset;for(const tr of westTroops){const j=Math.round((tr.i+0.5)/16*(f.length-1)),p=(tr.side==='de'?off(-1):off(1))[j];tr.obj.position.copy(p);tr.obj.position.y=.07;
+ // §3: the Normandy detail replaces the broad-view western front entirely.
+ for(const tr of westTroops)tr.eligible=false;
+ if(westActive&&!ddayActive){const f=westState.front,off=westOffset;for(const tr of westTroops){const j=Math.round((tr.i+0.5)/16*(f.length-1)),p=(tr.side==='de'?off(-1):off(1))[j];tr.obj.position.copy(p);tr.obj.position.y=.07;
   const q=f[Math.min(j+1,f.length-1)].clone().sub(f[Math.max(0,j-1)]);const n=new T.Vector3(q.z,0,-q.x).normalize().multiplyScalar(tr.side==='de'?1:-1);tr.obj.rotation.y=-Math.atan2(n.z,n.x);
-  const px=(p.x/MW+.5)*CW,py=(p.z/MH+.5)*CH;tr.obj.visible=ms<westEndMs+86400000&&mc.isPointInPath(landPath,px,py);}}
+  const px=(p.x/MW+.5)*CW,py=(p.z/MH+.5)*CH;tr.eligible=ms<westEndMs+86400000&&mc.isPointInPath(landPath,px,py);}}
 
- for(const a of eastArrows){const dur=a.endMs-a.startMs,t=(ms-a.startMs)/dur;a.g.visible=t>=0&&t<=1&&ms<eastEndMs;if(!a.g.visible)continue;const u=Math.max(.035,Math.min(.995,t));const count=Math.floor(60*u)*6*6;a.tube.geometry.setDrawRange(0,count);const p=a.curve.getPoint(u),dir=a.curve.getTangent(u).normalize();a.head.position.copy(p);a.head.quaternion.setFromUnitVectors(new T.Vector3(0,1,0),dir);const m=a.curve.getPoint(Math.max(0,u-.09));a.mover.position.copy(m);a.mover.position.y=.1;a.mover.rotation.y=-Math.atan2(dir.z,dir.x);}
+ for(const a of eastArrows){const dur=a.endMs-a.startMs,t=(ms-a.startMs)/dur;a.g.visible=t>=0&&t<=1&&ms<eastEndMs;a.mover.userData.eligible=a.g.visible;if(!a.g.visible)continue;const u=Math.max(.035,Math.min(.995,t));const count=Math.floor(60*u)*6*6;a.tube.geometry.setDrawRange(0,count);const p=a.curve.getPoint(u),dir=a.curve.getTangent(u).normalize();a.head.position.copy(p);a.head.quaternion.setFromUnitVectors(new T.Vector3(0,1,0),dir);const m=a.curve.getPoint(Math.max(0,u-.09));a.mover.position.copy(m);a.mover.position.y=.1;a.mover.rotation.y=-Math.atan2(dir.z,dir.x);}
 
- for(const p of pockets){const on=ms>=p.startMs&&ms<p.endMs;p.ring.visible=p.unit.visible=on;p.el.style.display=on?'block':'none'}
+ for(const p of pockets){const on=ms>=p.startMs&&ms<p.endMs;p.ring.visible=on;p.unit.userData.eligible=on;p.el.style.display=on?'block':'none'}
 
  // Normandy detail: pre-built objects, only visibility/position updated, never rebuilt.
  normandyGroup.visible=ddayActive;
  if(ddayActive){
   const t=ddayU*ddayTotal;
   const ddayDate=new Date(ms);ddayClock='1944 / 06 / 06  '+String(ddayDate.getUTCHours()).padStart(2,'0')+':'+String(ddayDate.getUTCMinutes()).padStart(2,'0');
-  for(const r of ndRoutes){r.arrow.visible=t>=18;r.path.visible=true;r.marker.visible=t>=r.landing;
-   r.boats.forEach((obj,i)=>{const start=18+i*1.5,arrival=r.landing+i*2.5;let progress=T.MathUtils.clamp((t-start)/(arrival-start),0,1);obj.visible=t>=start&&t<=arrival+2;
-    if(t>=62+i*3&&t<100){const cycle=(t-62-i*3)%16;progress=Math.min(1,cycle/12);obj.visible=cycle<=13;}
+  for(const r of ndRoutes){r.arrow.visible=t>=18;r.path.visible=true;r.marker.visible=t>=r.landing;r.defense.userData.eligible=true;
+   r.boats.forEach((obj,i)=>{const {eligible,remaining,progress}=boatState(r,i,t);obj.userData.eligible=eligible;obj.userData.remaining=remaining;
     obj.position.copy(r.start).lerp(r.end,progress);obj.position.y=.10;obj.rotation.y=Math.atan2(r.direction.x,r.direction.z);});}
-  for(const d of ndAir){const active=t<18,u=T.MathUtils.clamp(t/18,0,1);d.obj.visible=active;d.path.visible=active;d.marker.visible=true;d.obj.position.copy(d.curve.getPoint(u));const tangent=d.curve.getTangent(u);d.obj.quaternion.setFromUnitVectors(new T.Vector3(0,0,1),tangent.normalize());}
+  for(const d of ndAir){const active=t<18,u=T.MathUtils.clamp(t/18,0,1);d.obj.userData.eligible=active;d.path.visible=active;d.marker.visible=true;d.obj.position.copy(d.curve.getPoint(u));const tangent=d.curve.getTangent(u);d.obj.quaternion.setFromUnitVectors(new T.Vector3(0,0,1),tangent.normalize());}
   ndBombardments.forEach((b,i)=>{const on=t>=18&&t<58;b.path.visible=b.dot.visible=on;if(on)b.dot.position.copy(b.curve.getPoint(((t-18)*.3+i*.17)%1))});
   leaderCanvas.style.display='block';
  } else {
-  for(const r of ndRoutes){r.arrow.visible=r.path.visible=r.marker.visible=false;r.boats.forEach(o=>o.visible=false);}
-  for(const d of ndAir){d.obj.visible=d.path.visible=d.marker.visible=false;}
+  for(const r of ndRoutes){r.arrow.visible=r.path.visible=r.marker.visible=false;r.defense.userData.eligible=false;r.boats.forEach(o=>o.userData.eligible=false);}
+  for(const d of ndAir)d.obj.userData.eligible=false;
   ndBombardments.forEach(b=>{b.path.visible=b.dot.visible=false});
   for(const item of ndPlaceLabels)item.el.style.visibility='hidden';
   leaderCanvas.style.display='none';lc.clearRect(0,0,stageW,stageH);beachFallbackEl.hidden=true;
  }
 
- renderer.render(scene,camera);
+ world.updateMatrixWorld(true); // §8: parent/child world matrices current before any projection below
 
- // Text first (ddayClock/casualty totals may resize the HUD), then refresh exclusion zones if the
- // HUD's footprint actually changed, and only then place labels — so labels never race stale HUD rects.
+ // ---- §8 step3: text first (ddayClock/casualty totals may resize the HUD), then measure UI occupancy
+ // only if it actually changed footprint ----
  let text;
  if(ddayActive)text=ddayClock;else{const date=new Date(ms);text=date.toISOString().slice(0,10).replaceAll('-',' / ')}
  $('date').textContent=text;
  renderCasualties(ms);
  if(hudSizeDirty)updateLabelExclusionZones();
 
+ // ---- §8 step4: priority labels, placed and measured before model density is resolved (§7) ----
  const large=stageW>800;
  const focus=ll(eastState.a.focus);
  eastCityLabels.forEach(c=>{c.el.style.display=!large&&![0,4,5,6,7,9].includes(c.i)?'none':'block';c.el.classList.toggle('highlight',Math.hypot(c.p.x-focus.x,c.p.z-focus.z)<2.5);placeLabel(c.el,c.p,-18)});
  const westLabelDy={0:-18,2:-30,5:-6,6:16,7:-18}; // hand-tuned offsets keep Antwerp/Remagen/Frankfurt from overlapping when the camera is zoomed out
  westCityLabels.forEach(c=>{c.el.style.display=westActive&&large&&(c.i in westLabelDy)?'block':'none';placeLabel(c.el,c.p,westLabelDy[c.i]??-18)});
  seaLabels.forEach(c=>placeLabel(c.el,c.p));
- for(const p of pockets){if(ms>=p.startMs&&ms<p.endMs)placeLabel(p.el,p.pos,24)}
- if(ddayActive)placeNormandyLabels();
+ const priorityLabelRects=[];
+ for(const p of pockets){if(ms>=p.startMs&&ms<p.endMs){placeLabel(p.el,p.pos,24);const r=labelRect(p.el);if(r)priorityLabelRects.push(r)}}
+ if(ddayActive)priorityLabelRects.push(...placeNormandyLabels());
  compass.style.transform='rotate('+(-cam.azimuth*180/Math.PI)+'deg)';
+
+ // ---- §8 step5/step6: model sizing+density, then apply the decided visibility and render ----
+ resolveModelVisibility(uiExclusionZones.concat(priorityLabelRects),ddayActive);
+ applyModelVisibility(ddayActive);
+ renderer.render(scene,camera);
 
  const chapterIdx=Math.max(0,CHAPTERS.findLastIndex(c=>c.ms<=ms));
  if(lastChapterIdx!==chapterIdx){$('chapter').textContent=String(chapterIdx+1).padStart(2,'0')+' / '+CHAPTERS.length;$('chapters').value=chapterIdx;lastChapterIdx=chapterIdx}
