@@ -505,6 +505,9 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     mover.userData.order = order;
     return { ...a, curve, g, tube, head, mover, startMs: msOf(a.start), endMs: msOf(a.end) };
   });
+  // R5: mover.userData.order never changes after construction, so fix the candidate-priority order here
+  // once instead of re-sorting eastArrows every resolveModelVisibility() call (i.e. every frame).
+  const eastArrowsByOrder = [...eastArrows].sort((a, b) => a.mover.userData.order - b.mover.userData.order);
   const eastCityLabels = D.east.cities.map((c, i) => {
     const p = ll([c[1], c[2]]);
     const pin = new T.Mesh(gPin, mPin);
@@ -558,6 +561,8 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     labels.append(el);
     return { ...p, pos, ring, unit, el, startMs: msOf(p.start), endMs: msOf(p.end) };
   });
+  // R5: same fixed-order precomputation as eastArrowsByOrder above.
+  const pocketsByOrder = [...pockets].sort((a, b) => a.unit.userData.order - b.unit.userData.order);
 
   // ---- §5.1 regular-tank candidate order: center-out breadth-first over front-line site indices, sites
   // visited earlier alternate which side is processed first, east front's sites precede west's ----
@@ -622,6 +627,9 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     (side) => (side === "de" ? sideDe : sideWa),
   );
   westTroops.forEach((t) => (t.order += eastTroops.length)); // §5.1: east front's sites precede west's in the fixed order
+  // R5: same fixed-order precomputation as eastArrowsByOrder above; regular-tank order (§5.1) is set once
+  // here and never changes afterward, so resolveModelVisibility() can filter this instead of re-sorting.
+  const allTroopsByOrder = [...eastTroops, ...westTroops].sort((a, b) => a.order - b.order);
 
   // ================= NORMANDY DETAIL (pre-built once; only visibility/transform change afterwards) =================
   const normandyGroup = new T.Group();
@@ -745,6 +753,9 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     defense.userData.order = beachOrder;
     return { ...b, beachOrder, start, end, direction, path, arrow, boats, marker, defense };
   });
+  // R5: beachOrder (and defense.userData.order, set to the same beachOrder above) never changes after
+  // construction, so fix this order once instead of re-sorting ndRoutes on every D-Day frame.
+  const ndRoutesByBeachOrder = [...ndRoutes].sort((a, b) => a.beachOrder - b.beachOrder);
   const ndAir = D.normandy.drops.map((d, order) => {
     const p = ll(d.at),
       a = ll(d.from);
@@ -772,6 +783,8 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     ndLabel(d.name, ll(d.label), "airborne", 15, p);
     return { curve, path, obj, marker };
   });
+  // R5: same fixed-order precomputation as ndRoutesByBeachOrder above.
+  const ndAirByOrder = [...ndAir].sort((a, b) => a.obj.userData.order - b.obj.userData.order);
   const ndBombardments = ndRoutes.map((r) => {
     const start = r.start.clone().lerp(r.end, 0.5);
     start.y = 0.15;
@@ -1158,6 +1171,10 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
 
   // ---- Aggregation: casualtiesAt(ms) is a pure function of the historical date, never of playback history ----
   const timelineStartMs = MASTER_NODES[0].ms;
+  // R6: every CASUALTY_EVENTS date is fixed at load time, but casualtiesAt() re-parses e.start/e.end with
+  // msOf() on every call (54 parses per call, at 9 events × 3 factions × 2 dates). Parse each event's dates
+  // once here, into data kept separate from CASUALTY_EVENTS itself, and look them up by event below.
+  const CASUALTY_EVENT_MS = new Map(CASUALTY_EVENTS.map((e) => [e, { startMs: msOf(e.start), endMs: msOf(e.end) }]));
   function progressAt(startMs, endMs, ms) {
     if (ms < startMs) return 0;
     if (endMs === startMs) return 1; // instantaneous bulk-count event
@@ -1172,8 +1189,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
         activeEventIds = [];
       for (const e of CASUALTY_EVENTS) {
         if (!e.included) continue;
-        const startMs = msOf(e.start),
-          endMs = msOf(e.end);
+        const { startMs, endMs } = CASUALTY_EVENT_MS.get(e);
         if (ms < startMs) continue;
         activeEventIds.push(e.id);
         const loss = e.losses[f];
@@ -1357,6 +1373,11 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       dc.lineCap = "round";
       dc.stroke();
     };
+    // §8/R1: model placement calls eastOffset(dir)/westOffset(dir) once per model (44+32 calls in a
+    // normal two-front frame), but dir is always -1 or 1, so each front only ever needs two distinct
+    // offset arrays per frame. Memoize per direction here instead of re-mapping every front point on
+    // every call; the cache is a fresh local each drawOverlay() call, so it never survives past this
+    // frame or leaks across east/west.
     let eastOffset = null,
       westOffset = null;
     if (eastFront) {
@@ -1365,7 +1386,9 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       stroke(eastFront, "rgba(255,255,255,.9)", 6);
       stroke(offset(eastFront, -1, 0.05), "#111318", 2.9);
       stroke(offset(eastFront, 1, 0.05), "#c92535", 2.9);
-      eastOffset = (dir) => offset(eastFront, dir, 0.43);
+      let eastOffsetNeg = null,
+        eastOffsetPos = null;
+      eastOffset = (dir) => (dir < 0 ? (eastOffsetNeg ??= offset(eastFront, dir, 0.43)) : (eastOffsetPos ??= offset(eastFront, dir, 0.43)));
     }
     if (westFront) {
       fill(westFront, -1, "rgba(17,19,24,.19)");
@@ -1373,7 +1396,9 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       stroke(westFront, "rgba(255,255,255,.9)", 6);
       stroke(offset(westFront, -1, 0.05), "#111318", 2.9);
       stroke(offset(westFront, 1, 0.05), "#236f91", 2.9);
-      westOffset = (dir) => offset(westFront, dir, 0.43);
+      let westOffsetNeg = null,
+        westOffsetPos = null;
+      westOffset = (dir) => (dir < 0 ? (westOffsetNeg ??= offset(westFront, dir, 0.43)) : (westOffsetPos ??= offset(westFront, dir, 0.43)));
     }
     // Faint invasion start line is a reference front, not a political boundary.
     dc.setLineDash([8, 10]);
@@ -1406,6 +1431,9 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   // Normandy-detail labels reuse the original leader-line collision resolver so five nearby
   // beach names stay legible instead of overlapping (ported from the pre-unification Normandy engine).
   const ndLabelPriority = { beach: 0, airborne: 1, sea: 2, city: 3 };
+  // R5: ndPlaceLabels' priority order never changes after construction, so sort it once here instead
+  // of re-sorting every placeNormandyLabels() call (i.e. every D-Day frame).
+  const ndPlaceLabelsByPriority = [...ndPlaceLabels].sort((a, b) => ndLabelPriority[a.cls] - ndLabelPriority[b.cls]);
   const beachOffsets = [0, -24, 24, -48, 48, -72, 72, -96, 96, -120, 120, -144, 144];
   const beachFallbackEl = $("beach-fallback");
   function placeNormandyLabels() {
@@ -1419,7 +1447,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       world.localToWorld(q);
       return q.project(camera);
     };
-    for (const item of [...ndPlaceLabels].sort((a, b) => ndLabelPriority[a.cls] - ndLabelPriority[b.cls])) {
+    for (const item of ndPlaceLabelsByPriority) {
       const q = project(item.p);
       item.el.style.visibility = "hidden";
       const visiblePoint = item.anchor ? project(item.anchor) : q;
@@ -1777,9 +1805,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     resetAllAccepted();
     const usedRects = [];
     if (ddayActive) {
-      const planes = ndAir
-        .filter((d) => d.obj.userData.eligible)
-        .sort((a, b) => a.obj.userData.order - b.obj.userData.order);
+      const planes = ndAirByOrder.filter((d) => d.obj.userData.eligible);
       for (const d of planes) {
         ensureBaseScale(d.obj, VISUAL_CONFIG.plane);
         tryAcceptModel(d.obj, VISUAL_CONFIG.plane, usedRects, exclusionRects);
@@ -1787,7 +1813,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     }
     if (ddayActive) {
       const cap = compactQuery.matches ? 1 : 3;
-      for (const r of [...ndRoutes].sort((a, b) => a.beachOrder - b.beachOrder)) {
+      for (const r of ndRoutesByBeachOrder) {
         const active = r.boats
           .filter((o) => o.userData.eligible)
           .sort((a, b) => a.userData.remaining - b.userData.remaining || a.userData.i - b.userData.i);
@@ -1806,27 +1832,23 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       }
     }
     {
-      const cands = pockets
-        .filter((p) => p.unit.userData.eligible)
-        .sort((a, b) => a.unit.userData.order - b.unit.userData.order);
+      const cands = pocketsByOrder.filter((p) => p.unit.userData.eligible);
       for (const p of cands) {
         ensureBaseScale(p.unit, VISUAL_CONFIG.tank);
         tryAcceptModel(p.unit, VISUAL_CONFIG.tank, usedRects, exclusionRects);
       }
     }
     {
-      const cands = eastArrows
-        .filter((a) => a.mover.userData.eligible)
-        .sort((a, b) => a.mover.userData.order - b.mover.userData.order);
+      const cands = eastArrowsByOrder.filter((a) => a.mover.userData.eligible);
       for (const a of cands) {
         ensureBaseScale(a.mover, VISUAL_CONFIG.tank);
         tryAcceptModel(a.mover, VISUAL_CONFIG.tank, usedRects, exclusionRects);
       }
     }
     if (ddayActive) {
-      const cands = ndRoutes
-        .filter((r) => r.defense.userData.eligible)
-        .sort((a, b) => a.defense.userData.order - b.defense.userData.order);
+      // defense.userData.order was set to the same beachOrder used by ndRoutesByBeachOrder above, so
+      // that precomputed order also covers this pass.
+      const cands = ndRoutesByBeachOrder.filter((r) => r.defense.userData.eligible);
       for (const r of cands) {
         ensureBaseScale(r.defense, VISUAL_CONFIG.defense);
         tryAcceptModel(r.defense, VISUAL_CONFIG.defense, usedRects, exclusionRects);
@@ -1843,7 +1865,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       }
     }
     {
-      const cands = [...eastTroops, ...westTroops].filter((tr) => tr.eligible).sort((a, b) => a.order - b.order);
+      const cands = allTroopsByOrder.filter((tr) => tr.eligible);
       for (const tr of cands) {
         ensureBaseScale(tr.obj, VISUAL_CONFIG.tank);
         tryAcceptModel(tr.obj, VISUAL_CONFIG.tank, usedRects, exclusionRects);
