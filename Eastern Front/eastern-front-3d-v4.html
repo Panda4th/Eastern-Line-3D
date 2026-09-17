@@ -99,7 +99,23 @@ const gBody=new T.BoxGeometry(.63,.22,.39),gTrack=new T.BoxGeometry(.7,.16,.13),
 // both sides of a model-model pair yields the spec's 6px minimum gap; a model-vs-label/UI test inflates
 // only the model rect, per §5.2's "ラベルとUIに対しては模型矩形側のみ3 CSS px拡張する".
 const VISUAL_CONFIG={tank:{scale:.65,maxPx:24},plane:{scale:.65,maxPx:30},craft:{scale:.65,maxPx:24},defense:{scale:1,maxPx:18},inflatePx:3};
-function markVisual(obj,kind){obj.updateMatrixWorld(true);obj.userData.kind=kind;obj.userData.localBox=new T.Box3().setFromObject(obj);return obj}
+// §4.2: the saved box must be in the model ROOT's own local space, independent of whatever position/
+// rotation the root itself currently carries (or will carry once the caller repositions it) and of
+// whether it's already attached to a parent. A single Mesh's own geometry box already qualifies. A
+// Group's box is the union of each child mesh's geometry box transformed by the CHILD's local matrix
+// only (never matrixWorld, which would fold in the root's own live transform).
+function localBoxOf(root){
+ if(root.isMesh){if(!root.geometry.boundingBox)root.geometry.computeBoundingBox();return root.geometry.boundingBox.clone()}
+ const box=new T.Box3();
+ for(const child of root.children){
+  if(!child.isMesh)continue;
+  if(!child.geometry.boundingBox)child.geometry.computeBoundingBox();
+  child.updateMatrix();
+  box.union(child.geometry.boundingBox.clone().applyMatrix4(child.matrix));
+ }
+ return box;
+}
+function markVisual(obj,kind){obj.userData.kind=kind;obj.userData.localBox=localBoxOf(obj);return obj}
 function tank(mat,track){const g=new T.Group();const box=(x,y,z,geo,m)=>{const o=new T.Mesh(geo,m);o.position.set(x,y,z);g.add(o)};box(0,.13,0,gBody,mat);box(0,.075,-.25,gTrack,track);box(0,.075,.25,gTrack,track);box(-.04,.31,0,gTurret,mat);box(.29,.34,0,gGun,mat);return markVisual(g,'tank')}
 
 // ---- Timekeeping helpers (dates are compared as ms, never re-derived from playback history) ----
@@ -557,7 +573,11 @@ function findModelScale(obj,cfg){
 function tryAcceptModel(obj,cfg,usedRects,exclusionRects){
  const found=findModelScale(obj,cfg);
  if(!found){obj.userData.accepted=false;return false}
- const inflated=inflateRect(clipToStage(found.rect),VISUAL_CONFIG.inflatePx);
+ const clipped=clipToStage(found.rect);
+ // A model with no on-screen footprint (fully off-screen, any edge) never occupies real space, so it
+ // must not consume a used-rect slot or a per-beach cap count — reject before inflating.
+ if(clipped.w<=0||clipped.h<=0){obj.userData.accepted=false;return false}
+ const inflated=inflateRect(clipped,VISUAL_CONFIG.inflatePx);
  for(const ex of exclusionRects)if(rectsCollide(inflated,ex)){obj.userData.accepted=false;return false}
  for(const u of usedRects)if(rectsCollide(inflated,u)){obj.userData.accepted=false;return false}
  usedRects.push(inflated);obj.userData.accepted=true;
@@ -581,10 +601,25 @@ function boatState(r,i,t){
  if(t>=62+i*3&&t<100){const cycle=(t-62-i*3)%16;progress=Math.min(1,cycle/12);eligible=cycle<=13;remaining=cycle<=12?Math.max(0,12-cycle):0}
  return {eligible,remaining,progress};
 }
+// A per-beach cap or a tier that stops early (the representative search breaks on the first fit) can
+// leave some eligible candidates never reaching tryAcceptModel this frame — e.g. a boat that was the
+// accepted representative last frame but loses its beach's single compact-mode slot to a different one
+// this frame. Without this reset such a candidate's `accepted` from a prior frame would survive
+// untouched and leak through applyModelVisibility. Reset every density-controlled model's `accepted` to
+// false before any tier runs, so only what this pass actually (re-)accepts ends up true.
+function resetAllAccepted(){
+ for(const tr of eastTroops)tr.obj.userData.accepted=false;
+ for(const tr of westTroops)tr.obj.userData.accepted=false;
+ for(const p of pockets)p.unit.userData.accepted=false;
+ for(const a of eastArrows)a.mover.userData.accepted=false;
+ for(const r of ndRoutes){r.defense.userData.accepted=false;for(const o of r.boats)o.userData.accepted=false}
+ for(const d of ndAir)d.obj.userData.accepted=false;
+}
 // §5.2/§7: the single decision pass. Fixed priority order: planes, each beach's representative landing
 // craft, pocket tanks, arrow-riding tanks, defense points, additional landing craft, regular tanks
 // (§5.1 order). Same used-rect set spans every type and both sides.
 function resolveModelVisibility(exclusionRects,ddayActive){
+ resetAllAccepted();
  const usedRects=[];
  if(ddayActive){
   const planes=ndAir.filter(d=>d.obj.userData.eligible).sort((a,b)=>a.obj.userData.order-b.obj.userData.order);
