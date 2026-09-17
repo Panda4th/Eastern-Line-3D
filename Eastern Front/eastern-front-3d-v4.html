@@ -428,8 +428,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     }
     return box;
   }
-  function markVisual(obj, kind) {
-    obj.userData.kind = kind;
+  function markVisual(obj) {
     obj.userData.localBox = localBoxOf(obj);
     return obj;
   }
@@ -445,7 +444,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     box(0, 0.075, 0.25, gTrack, track);
     box(-0.04, 0.31, 0, gTurret, mat);
     box(0.29, 0.34, 0, gGun, mat);
-    return markVisual(g, "tank");
+    return markVisual(g);
   }
 
   // ---- Timekeeping helpers (dates are compared as ms, never re-derived from playback history) ----
@@ -712,7 +711,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     g.add(ndBox(0.25, 0.1, 0.13, 0xb8c9c8, 0, 0.2, -0.18));
     g.add(ndBox(0.29, 0.04, 0.1, 0x375361, 0, 0.14, 0.32));
     normandyGroup.add(g);
-    return markVisual(g, "craft");
+    return markVisual(g);
   }
   function plane() {
     const g = new T.Group();
@@ -720,7 +719,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     g.add(ndBox(0.83, 0.045, 0.14, GREEN, 0, 0, 0.06));
     g.add(ndBox(0.34, 0.035, 0.09, GREEN, 0, 0, -0.28));
     normandyGroup.add(g);
-    return markVisual(g, "plane");
+    return markVisual(g);
   }
   const ndRoutes = D.normandy.beaches.map((b, beachOrder) => {
     const end = coast(b.at),
@@ -736,15 +735,15 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     });
     const marker = ndRing(end, BLUE, 0.48);
     const anchor = ll(b.label);
-    const label = ndLabel(b.name + " / " + b.force, anchor, "beach", -14, end);
+    ndLabel(b.name + " / " + b.force, anchor, "beach", -14, end);
     // The black symbol denotes a defended sector, not an individual mapped bunker.
     const defense = ndBox(0.45, 0.22, 0.3, BLACK);
     defense.position.copy(end).addScaledVector(direction, 0.38);
     defense.position.y = 0.14;
     normandyGroup.add(defense);
-    markVisual(defense, "defense");
+    markVisual(defense);
     defense.userData.order = beachOrder;
-    return { ...b, beachOrder, start, end, direction, path, arrow, boats, marker, label, defense };
+    return { ...b, beachOrder, start, end, direction, path, arrow, boats, marker, defense };
   });
   const ndAir = D.normandy.drops.map((d, order) => {
     const p = ll(d.at),
@@ -770,10 +769,10 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       0.8,
       true,
     );
-    const label = ndLabel(d.name, ll(d.label), "airborne", 15, p);
-    return { p, curve, path, obj, marker, label };
+    ndLabel(d.name, ll(d.label), "airborne", 15, p);
+    return { curve, path, obj, marker };
   });
-  const ndBombardments = ndRoutes.map((r, i) => {
+  const ndBombardments = ndRoutes.map((r) => {
     const start = r.start.clone().lerp(r.end, 0.5);
     start.y = 0.15;
     const mid = start.clone().lerp(r.end, 0.5);
@@ -1221,7 +1220,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
           hudSizeDirty = true;
         }
       }
-      return null;
+      return;
     }
     const agg = casualtiesAt(ms);
     for (const f of CASUALTY_FACTIONS) {
@@ -1232,7 +1231,6 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
         hudSizeDirty = true;
       }
     }
-    return agg;
   }
 
   // ---- Casualty source list: records adopted/excluded/unconfirmed status per design doc §5, not just an empty data box ----
@@ -1668,11 +1666,11 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     };
     let rect = measure(base),
       L = rect ? Math.max(rect.w, rect.h) : Infinity;
-    if (rect && L <= cfg.maxPx) return { scale: base, rect };
+    if (rect && L <= cfg.maxPx) return { rect };
     const hi0 = isFinite(L) ? base * Math.min(1, cfg.maxPx / L) : base;
     let rectHi = measure(hi0),
       LHi = rectHi ? Math.max(rectHi.w, rectHi.h) : Infinity;
-    if (rectHi && LHi <= cfg.maxPx) return { scale: hi0, rect: rectHi };
+    if (rectHi && LHi <= cfg.maxPx) return { rect: rectHi };
     let lo = 0,
       hi = hi0,
       loRect = null;
@@ -1689,7 +1687,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     // measure() above may have left matrixWorld at the last *tested* mid, not at `lo` — resync before returning.
     obj.scale.setScalar(lo);
     obj.updateMatrixWorld(true);
-    return { scale: lo, rect: loRect };
+    return { rect: loRect };
   }
   // §5.2 step4: accept iff it fits size-wise, avoids exclusion zones (label/UI rects, 3px model-side margin
   // only) and avoids already-accepted models (both sides get the 3px margin, i.e. a 6px minimum gap).
