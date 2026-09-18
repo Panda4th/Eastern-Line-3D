@@ -1286,7 +1286,13 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     }
     return result;
   }
-  const casualtyRegisteredCount = CASUALTY_EVENTS.filter((e) => e.included).length;
+  // Fix (follow-up review): CASUALTY_EVENTS may contain a malformed record that validateCasualtyEvents()
+  // already reported in CASUALTY_ERRORS — e.included on it (null, a number, etc.) throws, which would abort
+  // this whole IIFE before window.animation is ever assigned. 0 here is never actually displayed as "no
+  // registered battles" in that case: casualtyDisplayFor() (the only reader of this constant) is only
+  // reached from renderCasualties()'s success path, and renderCasualties()/the source list above both
+  // already show the validation errors instead whenever CASUALTY_ERRORS is non-empty.
+  const casualtyRegisteredCount = CASUALTY_ERRORS.length ? 0 : CASUALTY_EVENTS.filter((e) => e.included).length;
 
   // ---- Display formatting: rounding never shows a positive value as 0 and never regresses as the total grows ----
   const CASUALTY_FACTION_NAMES = { de: "ドイツ軍", su: "ソ連軍", wa: "西側連合軍" };
@@ -1637,9 +1643,9 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   let labelSizeCache = new WeakMap();
   // Fix 5 (follow-up review): a second cache, keyed and invalidated the same way as labelSizeCache below,
   // but holding getBoundingClientRect()'s fractional width/height instead of offsetWidth/offsetHeight's
-  // rounded integers. placeNormandyLabels()/labelRect() used getBoundingClientRect() before they were
-  // switched onto a cache; getLabelSize()'s integer precision is placeLabel()'s own pre-existing behavior
-  // for the regular city/sea labels and is left as is.
+  // rounded integers. Used only by placeNormandyLabels() below, which originally measured with
+  // getBoundingClientRect() before being switched onto a cache. labelRect() and placeLabel() both
+  // originally measured with offsetWidth/offsetHeight (integer) and stay on getLabelSize() below.
   let labelRectSizeCache = new WeakMap();
   function resetLabelSizeCache() {
     labelSizeCache = new WeakMap();
@@ -1882,10 +1888,12 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   // A placed label's rect for model exclusion (labels are center-anchored via CSS transform:translate(-50%,-50%)).
   function labelRect(el) {
     if (el.style.visibility === "hidden" || el.style.display === "none") return null;
-    // R02/Fix 5: pocket label text is fixed after construction, so cache instead of forcing a fresh layout
-    // read right after placeLabel()'s style write — via getLabelSizePrecise() (getBoundingClientRect(),
-    // fractional), matching this code's original pre-cache precision, not getLabelSize()'s rounded integers.
-    const { w, h } = getLabelSizePrecise(el);
+    // R02: pocket label text is fixed after construction, so reuse the cached size (see placeLabel) instead
+    // of offsetWidth/offsetHeight, which forces a fresh layout read right after placeLabel()'s style write.
+    // This function's original, pre-cache measurement was also offsetWidth/offsetHeight (integer), unlike
+    // placeNormandyLabels() below, which originally used getBoundingClientRect() (fractional) — so this
+    // stays on getLabelSize(), not getLabelSizePrecise().
+    const { w, h } = getLabelSize(el);
     if (!w || !h) return null;
     const cx = parseFloat(el.style.left),
       cy = parseFloat(el.style.top);
