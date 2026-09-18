@@ -1581,8 +1581,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     lastDateStr = "",
     lastEvent = null,
     stageW = stage.clientWidth,
-    stageH = stage.clientHeight,
-    ddayClock = "";
+    stageH = stage.clientHeight;
   // R1: the ms-derived state from the last time-based frame() call, reused by redrawCameraFrame() below
   // so a camera/layout-only redraw never re-derives front-line/D-Day state that hasn't changed.
   let lastFrameMs = null,
@@ -1978,7 +1977,10 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     if (ddayActive) {
       const t = ddayU * ddayTotal;
       const ddayDate = new Date(ms);
-      ddayClock =
+      // R04: returned below instead of written to a shared module-level ddayClock variable, so
+      // updateHudText's dependency on this value is visible at its call site in frame(), not just
+      // through closure.
+      const ddayClockText =
         "1944 / 06 / 06  " +
         String(ddayDate.getUTCHours()).padStart(2, "0") +
         ":" +
@@ -2013,6 +2015,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
         if (on) b.dot.position.copy(b.curve.getPoint(((t - 18) * 0.3 + i * 0.17) % 1));
       });
       leaderCanvas.style.display = "block";
+      return ddayClockText;
     } else {
       for (const r of ndRoutes) {
         r.arrow.visible = r.path.visible = r.marker.visible = false;
@@ -2027,14 +2030,16 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       leaderCanvas.style.display = "none";
       lc.clearRect(0, 0, stageW, stageH);
       beachFallbackEl.hidden = true;
+      return null;
     }
   }
   // Text first (ddayClock/casualty totals may resize the HUD), then measure UI occupancy only if it
   // actually changed footprint. Returns the date/clock text so frame() can reuse it below without
   // re-deriving it (and without this function writing lastDateStr itself — see updateControls).
-  function updateHudText(ms, ddayActive) {
+  // ddayClockText is updateDetailScene()'s return value for this same ms/ddayActive/ddayU.
+  function updateHudText(ms, ddayActive, ddayClockText) {
     let text;
-    if (ddayActive) text = ddayClock;
+    if (ddayActive) text = ddayClockText;
     else {
       const date = new Date(ms);
       text = date.toISOString().slice(0, 10).replaceAll("-", " / ");
@@ -2165,12 +2170,12 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     // 1) camera, 2) regular-model and detail-scene positions/visibility candidates.
     const cam = updateCamera(ms);
     placeRegularModels(ms, eastState, westState, westActive, ddayActive);
-    updateDetailScene(ms, ddayActive, ddayU);
+    const ddayClockText = updateDetailScene(ms, ddayActive, ddayU);
 
     world.updateMatrixWorld(true); // parent/child world matrices current before any projection below
 
     // 3) HUD text, 4) priority labels (measured before model density is resolved).
-    const text = updateHudText(ms, ddayActive);
+    const text = updateHudText(ms, ddayActive, ddayClockText);
     const priorityLabelRects = placePriorityLabels(ms, cam, eastState, westActive, ddayActive);
 
     // 5) model sizing+density decision, applied, 6) rendered.
