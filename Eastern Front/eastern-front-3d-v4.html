@@ -1142,9 +1142,22 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   function validateCasualtyEvents(events) {
     const errors = [];
     const seenIds = new Set();
+    // R05: a record that fails the shape checks below (missing/non-string id or dates, missing losses)
+    // is excluded from `validEvents` instead of being passed into msOf()/e.losses[f] anyway — both would
+    // throw on a malformed record (msOf on a non-string date, e.losses[f] on a missing losses object),
+    // taking down validation itself instead of reporting the record as invalid.
+    const validEvents = [];
     for (const e of events) {
+      if (typeof e.id !== "string" || !e.id) {
+        errors.push("IDが不正: " + JSON.stringify(e.id));
+        continue;
+      }
       if (seenIds.has(e.id)) errors.push("重複ID: " + e.id);
       seenIds.add(e.id);
+      if (typeof e.start !== "string" || typeof e.end !== "string") {
+        errors.push("日付の型が不正: " + e.id);
+        continue;
+      }
       const startMs = msOf(e.start),
         endMs = msOf(e.end);
       if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
@@ -1153,19 +1166,24 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       }
       if (endMs < startMs) errors.push("期間が逆転: " + e.id);
       if (e.metric !== "military_deaths") errors.push("指標違い: " + e.id);
+      let lossesOk = true;
       for (const f of CASUALTY_FACTIONS) {
         if (!e.losses || !(f in e.losses)) {
           errors.push("キー不足(" + f + "): " + e.id);
+          lossesOk = false;
           continue;
         }
         const v = e.losses[f];
-        if (v !== null && (!Number.isFinite(v) || v < 0 || !Number.isSafeInteger(v)))
+        if (v !== null && (!Number.isFinite(v) || v < 0 || !Number.isSafeInteger(v))) {
           errors.push("無効な数値(" + f + "): " + e.id);
+          lossesOk = false;
+        }
       }
+      if (lossesOk) validEvents.push(e);
     }
-    for (const e of events) {
+    for (const e of validEvents) {
       if (!e.parentId || !e.included) continue;
-      const parent = events.find((p) => p.id === e.parentId);
+      const parent = validEvents.find((p) => p.id === e.parentId);
       if (!parent || !parent.included) continue;
       const aS = msOf(e.start),
         aE = msOf(e.end),
@@ -1185,7 +1203,12 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   // R6: every CASUALTY_EVENTS date is fixed at load time, but casualtiesAt() re-parses e.start/e.end with
   // msOf() on every call (54 parses per call, at 9 events × 3 factions × 2 dates). Parse each event's dates
   // once here, into data kept separate from CASUALTY_EVENTS itself, and look them up by event below.
-  const CASUALTY_EVENT_MS = new Map(CASUALTY_EVENTS.map((e) => [e, { startMs: msOf(e.start), endMs: msOf(e.end) }]));
+  // R05: skipped entirely when validation found errors — msOf(e.start) would throw on the same malformed
+  // records validateCasualtyEvents() already reported. renderCasualties() never calls casualtiesAt() (and
+  // therefore never looks this map up) while CASUALTY_ERRORS is non-empty, so an empty map is fine here.
+  const CASUALTY_EVENT_MS = CASUALTY_ERRORS.length
+    ? new Map()
+    : new Map(CASUALTY_EVENTS.map((e) => [e, { startMs: msOf(e.start), endMs: msOf(e.end) }]));
   function progressAt(startMs, endMs, ms) {
     if (ms < startMs) return 0;
     if (endMs === startMs) return 1; // instantaneous bulk-count event
@@ -1265,56 +1288,60 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     "集計対象は、このアニメーションで扱う戦闘のうちデータを登録したものに限ります。世界大戦全体や各国全体の死亡者数ではありません。指標は軍人死亡者とし、負傷者・捕虜・行方不明者・民間人は含みません。死亡者のみを分離できない資料（戦死・行方不明・捕虜などの合算値しかない場合）は、その勢力を死亡者数として採用せず「不明」または「未確認」とします。登録戦闘が始まっていない期間は0人と表示し、開始前の累積は持ち込みません。期間内は戦闘ごとの概数を期間内で均等に配分した模式表示で、日別の実測値ではありません。数値が確認できない勢力は0人と断定せず「不明」または「判明分／未集計あり」と表示します。";
   {
     const list = $("casualty-source-list");
-    for (const e of CASUALTY_EVENTS) {
+    // R05: the per-event loop below reads e.losses[f] unconditionally, which throws on the same malformed
+    // record(s) validateCasualtyEvents() already reported — skip it entirely when there are errors and
+    // show them instead, rather than reaching a TypeError partway through building the list.
+    if (CASUALTY_ERRORS.length) {
       const li = document.createElement("li");
-      const header = document.createElement("div");
-      const parts = CASUALTY_FACTIONS.map((f) => {
-        const v = e.losses[f];
-        return (
-          CASUALTY_FACTION_NAMES[f] +
-          "：" +
-          (v === null ? "未確認" : v === 0 ? "非参加" : v.toLocaleString("ja-JP") + "人")
-        );
-      });
-      header.textContent =
-        e.title +
-        "（" +
-        e.start +
-        "〜" +
-        e.end +
-        "）　" +
-        parts.join("／") +
-        (e.coverageNote ? "　" + e.coverageNote : "");
-      li.append(header);
-      const basisList = document.createElement("ul");
-      basisList.className = "casualty-basis-list";
-      for (const f of CASUALTY_FACTIONS) {
-        const b = e.basis && e.basis[f];
-        if (!b) continue;
-        const bLi = document.createElement("li");
-        bLi.append(CASUALTY_FACTION_NAMES[f] + "：");
-        if (b.url) {
-          const a = document.createElement("a");
-          a.href = b.url;
-          a.textContent = b.note || b.url;
-          a.target = "_blank";
-          a.rel = "noopener";
-          a.setAttribute("aria-label", (b.note || b.url) + "（新しいタブで開く）");
-          bLi.append(a);
-        } else bLi.append(b.note || "出典未確認");
-        basisList.append(bLi);
-      }
-      li.append(basisList);
+      li.textContent = "集計データを確認：" + CASUALTY_ERRORS.join("／");
       list.append(li);
+    } else {
+      for (const e of CASUALTY_EVENTS) {
+        const li = document.createElement("li");
+        const header = document.createElement("div");
+        const parts = CASUALTY_FACTIONS.map((f) => {
+          const v = e.losses[f];
+          return (
+            CASUALTY_FACTION_NAMES[f] +
+            "：" +
+            (v === null ? "未確認" : v === 0 ? "非参加" : v.toLocaleString("ja-JP") + "人")
+          );
+        });
+        header.textContent =
+          e.title +
+          "（" +
+          e.start +
+          "〜" +
+          e.end +
+          "）　" +
+          parts.join("／") +
+          (e.coverageNote ? "　" + e.coverageNote : "");
+        li.append(header);
+        const basisList = document.createElement("ul");
+        basisList.className = "casualty-basis-list";
+        for (const f of CASUALTY_FACTIONS) {
+          const b = e.basis && e.basis[f];
+          if (!b) continue;
+          const bLi = document.createElement("li");
+          bLi.append(CASUALTY_FACTION_NAMES[f] + "：");
+          if (b.url) {
+            const a = document.createElement("a");
+            a.href = b.url;
+            a.textContent = b.note || b.url;
+            a.target = "_blank";
+            a.rel = "noopener";
+            a.setAttribute("aria-label", (b.note || b.url) + "（新しいタブで開く）");
+            bLi.append(a);
+          } else bLi.append(b.note || "出典未確認");
+          basisList.append(bLi);
+        }
+        li.append(basisList);
+        list.append(li);
+      }
     }
     for (const u of CASUALTY_UNREGISTERED) {
       const li = document.createElement("li");
       li.textContent = "【未登録】" + u.title + "　" + u.reason;
-      list.append(li);
-    }
-    if (CASUALTY_ERRORS.length) {
-      const li = document.createElement("li");
-      li.textContent = "集計データを確認：" + CASUALTY_ERRORS.join("／");
       list.append(li);
     }
   }
