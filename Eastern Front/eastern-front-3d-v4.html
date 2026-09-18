@@ -1580,6 +1580,12 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     stageW = stage.clientWidth,
     stageH = stage.clientHeight,
     ddayClock = "";
+  // R1: the ms-derived state from the last time-based frame() call, reused by redrawCameraFrame() below
+  // so a camera/layout-only redraw never re-derives front-line/D-Day state that hasn't changed.
+  let lastFrameMs = null,
+    lastEastState = null,
+    lastWestActive = false,
+    lastDdayActive = false;
   if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) playing = false;
   const allEvents = [...D.east.events, ...D.west.events].sort((a, b) =>
     a.date < b.date ? -1 : a.date > b.date ? 1 : 0,
@@ -2142,6 +2148,10 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     const ddayU = ddayActive
       ? T.MathUtils.clamp((currentSec - ddayStartSec) / (ddayEndSec - ddayStartSec), 0, 1)
       : null;
+    lastFrameMs = ms;
+    lastEastState = eastState;
+    lastWestActive = westActive;
+    lastDdayActive = ddayActive;
 
     // 1) camera, 2) regular-model and detail-scene positions/visibility candidates.
     const cam = updateCamera(ms);
@@ -2162,6 +2172,26 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     updateControls(ms, text);
   }
 
+  // R1: camera drag/zoom/keyboard nudges, the view toggle, a stage resize, a font-metrics reload, and the
+  // paused HUD-footprint settle pass (see the `hudSizeDirty` branch in animate() below) never move the
+  // playhead, so eastState/westActive/ddayActive/ddayU — all pure functions of ms — are exactly what the
+  // last frame(sec) call already computed. Reuse them instead of re-deriving front-line state, D-Day
+  // action state, and HUD/casualty text (whose values would come out identical), and only redo what a
+  // camera or layout change can actually affect: camera position, UI/label exclusion zones, label
+  // placement, and model density/visibility.
+  function redrawCameraFrame() {
+    if (lastFrameMs === null) {
+      frame(currentSec); // no time-based frame yet (first resize() before the initial frame() call below)
+      return;
+    }
+    if (hudSizeDirty) updateLabelExclusionZones();
+    const cam = updateCamera(lastFrameMs);
+    const priorityLabelRects = placePriorityLabels(lastFrameMs, cam, lastEastState, lastWestActive, lastDdayActive);
+    resolveModelVisibility(uiExclusionZones.concat(priorityLabelRects), lastDdayActive);
+    applyModelVisibility(lastDdayActive);
+    renderer.render(scene, camera);
+  }
+
   function resize() {
     if (!stage.clientWidth || !stage.clientHeight) return;
     applyHudLayout();
@@ -2174,7 +2204,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     camera.aspect = stageW / stageH;
     camera.updateProjectionMatrix();
     updateLabelExclusionZones();
-    frame(currentSec);
+    redrawCameraFrame();
   }
   const seek = $("seek");
   seek.max = total;
@@ -2214,7 +2244,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     setTopDown(!topDown);
     userAzimuth = 0;
     userZoom = 1;
-    frame(currentSec);
+    redrawCameraFrame();
   };
   // ---- Pointer handling: per-pointerId tracking so a second finger starts a pinch instead of jumping the drag ----
   const activePointers = new Map();
@@ -2259,14 +2289,14 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pinch && activePointers.size >= 2) {
       userZoom = T.MathUtils.clamp((pinch.startZoom * pinch.startDistance) / pointerDistance(), 0.5, 2.2);
-      frame(currentSec);
+      redrawCameraFrame();
       return;
     }
     if (drag && activePointers.size === 1) {
       setTopDown(false);
       userAzimuth = drag.az - (e.clientX - drag.x) * 0.004;
       userElevation = T.MathUtils.clamp(drag.el + (e.clientY - drag.y) * 0.004, 0.48, 1.56);
-      frame(currentSec);
+      redrawCameraFrame();
     }
   };
   function releasePointer(e) {
@@ -2290,7 +2320,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       if (!engaged) return;
       e.preventDefault();
       userZoom = T.MathUtils.clamp(userZoom - e.deltaY * 0.0006, 0.5, 2.2);
-      frame(currentSec);
+      redrawCameraFrame();
     },
     { passive: false },
   );
@@ -2307,7 +2337,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       0.48,
       1.56,
     );
-    frame(currentSec);
+    redrawCameraFrame();
   });
 
   window.animation = {
@@ -2346,7 +2376,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     document.fonts.ready.then(() => {
       resetLabelSizeCache();
       updateLabelExclusionZones();
-      frame(currentSec);
+      redrawCameraFrame();
     });
   let prev = performance.now();
   function animate(now) {
@@ -2363,7 +2393,8 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     }
     // Redraw while paused too when the HUD's own resize observer flagged a footprint change (e.g. a seek
     // while stopped changed the casualty text): one extra frame at the same currentSec, then it settles.
-    if (wasPlaying || hudSizeDirty) frame(currentSec);
+    if (wasPlaying) frame(currentSec);
+    else if (hudSizeDirty) redrawCameraFrame();
     requestAnimationFrame(animate);
   }
   requestAnimationFrame(animate);
