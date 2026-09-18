@@ -1610,6 +1610,11 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     lastEastState = null,
     lastWestActive = false,
     lastDdayActive = false;
+  // R08: true once updateDetailScene()'s non-detail branch needs to (re-)reset the Normandy-detail
+  // scene/DOM/leaderCanvas — the very first call, and every call right after leaving the D-Day window.
+  // False for every non-D-Day frame after that reset has already run, so the reset isn't repeated while
+  // already clean.
+  let detailSceneNeedsCleanup = true;
   if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) playing = false;
   const allEvents = [...D.east.events, ...D.west.events].sort((a, b) =>
     a.date < b.date ? -1 : a.date > b.date ? 1 : 0,
@@ -2044,21 +2049,27 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
         if (on) b.dot.position.copy(b.curve.getPoint(((t - 18) * 0.3 + i * 0.17) % 1));
       });
       leaderCanvas.style.display = "block";
+      detailSceneNeedsCleanup = true; // R08: next non-D-Day frame must reset this once
       return ddayClockText;
     } else {
-      for (const r of ndRoutes) {
-        r.arrow.visible = r.path.visible = r.marker.visible = false;
-        r.defense.userData.eligible = false;
-        r.boats.forEach((o) => (o.userData.eligible = false));
+      // R08: this reset only needs to run once per non-D-Day stretch (the transition out of D-Day, or the
+      // very first frame) — everything it touches already holds these values on every later false frame.
+      if (detailSceneNeedsCleanup) {
+        for (const r of ndRoutes) {
+          r.arrow.visible = r.path.visible = r.marker.visible = false;
+          r.defense.userData.eligible = false;
+          r.boats.forEach((o) => (o.userData.eligible = false));
+        }
+        for (const d of ndAir) d.obj.userData.eligible = false;
+        ndBombardments.forEach((b) => {
+          b.path.visible = b.dot.visible = false;
+        });
+        for (const item of ndPlaceLabels) item.el.style.visibility = "hidden";
+        leaderCanvas.style.display = "none";
+        lc.clearRect(0, 0, stageW, stageH);
+        beachFallbackEl.hidden = true;
+        detailSceneNeedsCleanup = false;
       }
-      for (const d of ndAir) d.obj.userData.eligible = false;
-      ndBombardments.forEach((b) => {
-        b.path.visible = b.dot.visible = false;
-      });
-      for (const item of ndPlaceLabels) item.el.style.visibility = "hidden";
-      leaderCanvas.style.display = "none";
-      lc.clearRect(0, 0, stageW, stageH);
-      beachFallbackEl.hidden = true;
       return null;
     }
   }
