@@ -459,6 +459,19 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       return points[ix - 1].clone().lerp(points[ix], (v - len[ix - 1]) / (len[ix] - len[ix - 1] || 1));
     });
   }
+  // R03: one unit normal per point, shared by every width/direction a front's overlay band needs
+  // (fill/stroke/model-offset) and by placeTroopsOnFront's rotation, instead of each recomputing it
+  // independently from the same neighbor-point difference.
+  function frontNormals(pts) {
+    return pts.map((p, i) => {
+      const a = pts[Math.max(i - 1, 0)],
+        b = pts[Math.min(i + 1, pts.length - 1)];
+      const qx = b.x - a.x,
+        qz = b.z - a.z,
+        len = Math.hypot(qx, qz) || 1;
+      return { x: qz / len, z: -qx / len };
+    });
+  }
   function prepFront(keyframes) {
     keyframes.forEach((k) => {
       k.ms = msOf(k.date);
@@ -1341,14 +1354,15 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     dc.save();
     dc.clip(landPath);
     const toPix = (v) => [(v.x / MW + 0.5) * CW, (v.z / MH + 0.5) * CH];
-    const offset = (pts, dir, width) =>
+    // R03: normals is front's precomputed frontNormals(front) (one per point); each offset point is built
+    // directly from it instead of re-deriving the normal (2 clone()s + 1 new Vector3()) per point per call.
+    const offsetFrom = (pts, normals, dir, width) =>
       pts.map((p, i) => {
-        const q = pts[Math.min(i + 1, pts.length - 1)].clone().sub(pts[Math.max(i - 1, 0)]);
-        const n = new T.Vector3(q.z, 0, -q.x).normalize().multiplyScalar(width * dir);
-        return p.clone().add(n);
+        const n = normals[i];
+        return new T.Vector3(p.x + n.x * width * dir, p.y, p.z + n.z * width * dir);
       });
-    const fill = (front, dir, color) => {
-      const edge = offset(front, dir, 0.65);
+    const fill = (front, normals, dir, color) => {
+      const edge = offsetFrom(front, normals, dir, 0.65);
       dc.beginPath();
       front.forEach((p, i) => {
         const q = toPix(p);
@@ -1380,23 +1394,31 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     // every call; the cache is local to this drawFrontBand() call, so it never survives past this
     // frame or leaks across east/west.
     function drawFrontBand(front, otherFillColor, otherStrokeColor) {
-      fill(front, -1, "rgba(17,19,24,.19)");
-      fill(front, 1, otherFillColor);
+      const normals = frontNormals(front);
+      fill(front, normals, -1, "rgba(17,19,24,.19)");
+      fill(front, normals, 1, otherFillColor);
       stroke(front, "rgba(255,255,255,.9)", 6);
-      stroke(offset(front, -1, 0.05), "#111318", 2.9);
-      stroke(offset(front, 1, 0.05), otherStrokeColor, 2.9);
+      stroke(offsetFrom(front, normals, -1, 0.05), "#111318", 2.9);
+      stroke(offsetFrom(front, normals, 1, 0.05), otherStrokeColor, 2.9);
       let offsetNeg = null,
         offsetPos = null;
-      return (dir) => (dir < 0 ? (offsetNeg ??= offset(front, dir, 0.43)) : (offsetPos ??= offset(front, dir, 0.43)));
+      const offsetFn = (dir) =>
+        dir < 0 ? (offsetNeg ??= offsetFrom(front, normals, dir, 0.43)) : (offsetPos ??= offsetFrom(front, normals, dir, 0.43));
+      return { offsetFn, normals };
     }
-    const eastOffset = eastFront ? drawFrontBand(eastFront, "rgba(201,37,53,.16)", "#c92535") : null;
-    const westOffset = westFront ? drawFrontBand(westFront, "rgba(35,111,145,.16)", "#236f91") : null;
+    const eastBand = eastFront ? drawFrontBand(eastFront, "rgba(201,37,53,.16)", "#c92535") : null;
+    const westBand = westFront ? drawFrontBand(westFront, "rgba(35,111,145,.16)", "#236f91") : null;
     // Faint invasion start line is a reference front, not a political boundary.
     dc.setLineDash([8, 10]);
     stroke(eastKeyframes[0].samples, "rgba(87,83,73,.38)", 1.5);
     dc.restore();
     dt.needsUpdate = true;
-    return { eastOffset, westOffset };
+    return {
+      eastOffset: eastBand ? eastBand.offsetFn : null,
+      westOffset: westBand ? westBand.offsetFn : null,
+      eastNormals: eastBand ? eastBand.normals : null,
+      westNormals: westBand ? westBand.normals : null,
+    };
   }
   function placeLabel(el, p, dy = 0) {
     const q = p.clone();
@@ -1888,15 +1910,17 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   // R7: east and west position/orient their regular tanks along their own front the same way, differing
   // only in site count, which front/offset function to read, and the eligibility condition (end-of-front
   // date, on-screen-only during the Normandy detail, etc.), which the caller supplies.
-  function placeTroopsOnFront(troops, siteCount, front, offsetFn, eligibleFor) {
+  function placeTroopsOnFront(troops, siteCount, front, offsetFn, normals, eligibleFor) {
     for (const tr of troops) {
       const j = Math.round(((tr.i + 0.5) / siteCount) * (front.length - 1)),
         p = (tr.side === "de" ? offsetFn(-1) : offsetFn(1))[j];
       tr.obj.position.copy(p);
       tr.obj.position.y = 0.07;
-      const q = front[Math.min(j + 1, front.length - 1)].clone().sub(front[Math.max(0, j - 1)]);
-      const n = new T.Vector3(q.z, 0, -q.x).normalize().multiplyScalar(tr.side === "de" ? 1 : -1);
-      tr.obj.rotation.y = -Math.atan2(n.z, n.x);
+      // R03: reuse the same unit normal drawOverlay() already computed for this front/point instead of
+      // re-deriving it from front[j-1]/front[j+1] here.
+      const n = normals[j],
+        sign = tr.side === "de" ? 1 : -1;
+      tr.obj.rotation.y = -Math.atan2(n.z * sign, n.x * sign);
       const px = (p.x / MW + 0.5) * CW,
         py = (p.z / MH + 0.5) * CH;
       tr.eligible = eligibleFor(p, px, py);
@@ -1922,7 +1946,10 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   // `.eligible` records existing land/time/scene gating; final `.visible` is decided once, later, by
   // resolveModelVisibility/applyModelVisibility (§3/§5.2).
   function placeRegularModels(ms, eastState, westState, westActive, ddayActive) {
-    const { eastOffset, westOffset } = drawOverlay(eastState.front, westActive ? westState.front : null);
+    const { eastOffset, westOffset, eastNormals, westNormals } = drawOverlay(
+      eastState.front,
+      westActive ? westState.front : null,
+    );
 
     // §3: during the Normandy detail, east-front candidates are limited to what's on-screen.
     placeTroopsOnFront(
@@ -1930,6 +1957,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       EAST_TROOP_SITES,
       eastState.front,
       eastOffset,
+      eastNormals,
       (p, px, py) => ms < eastEndMs && mc.isPointInPath(landPath, px, py) && (!ddayActive || onScreenApprox(p)),
     );
 
@@ -1941,6 +1969,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
         WEST_TROOP_SITES,
         westState.front,
         westOffset,
+        westNormals,
         (p, px, py) => ms < westEndMs + 86400000 && mc.isPointInPath(landPath, px, py),
       );
     }
