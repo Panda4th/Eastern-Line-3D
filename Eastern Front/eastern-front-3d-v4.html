@@ -1675,13 +1675,23 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     [0, 1, 1],
     [1, 1, 1],
   ];
+  // R12: findModelScale()'s repeated measure() calls below only ever read obj's own matrixWorld (never a
+  // child's — the projected box is obj.userData.localBox, obj's own saved local-space bounds), so update
+  // just obj instead of obj.updateMatrixWorld(true)'s full force-update of every descendant. Requires
+  // obj.parent.matrixWorld already current, true here since world.updateMatrixWorld(true) already ran
+  // earlier this frame and obj's ancestors don't move during this search.
+  function updateOwnMatrixWorld(obj) {
+    if (obj.matrixAutoUpdate) obj.updateMatrix();
+    if (obj.parent) obj.matrixWorld.multiplyMatrices(obj.parent.matrixWorld, obj.matrix);
+    else obj.matrixWorld.copy(obj.matrix);
+  }
   // §4.2: projects the model's saved local bounding box (base scale + current position/rotation/parent
   // transform) to a screen-space rect, including any portion outside the viewport. Returns null when any
   // corner fails the near-plane test (still in front of the near clip plane), so the frame skips the model.
   function projectBoxScreenRect(obj) {
     const box = obj.userData.localBox;
     if (!box || box.isEmpty()) return null;
-    obj.updateMatrixWorld(true);
+    updateOwnMatrixWorld(obj);
     let minX = Infinity,
       maxX = -Infinity,
       minY = Infinity,
@@ -1709,7 +1719,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   }
   // §4.2: initial guess min(1,Lmax/L), then up to 12 bisection steps over [0,thatScale] taking the passing side.
   function findModelScale(obj, cfg) {
-    obj.updateMatrixWorld(true);
+    updateOwnMatrixWorld(obj);
     _pv.setFromMatrixPosition(obj.matrixWorld);
     _pvCam.copy(_pv).applyMatrix4(camera.matrixWorldInverse);
     if (_pvCam.z > -camera.near) return null; // model origin itself not beyond the near plane: no scale can fix it
