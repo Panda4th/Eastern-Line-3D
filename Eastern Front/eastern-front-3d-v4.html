@@ -1176,6 +1176,13 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     // taking down validation itself instead of reporting the record as invalid.
     const validEvents = [];
     for (const e of events) {
+      // Fix 3 (follow-up review): a record that isn't a non-null, non-array object (e.g. null, a number,
+      // an array) crashes every check below it (e.id on null, `in` on a non-object losses) before it can
+      // be reported — reject that shape itself first, as its own error, instead of reaching those checks.
+      if (typeof e !== "object" || e === null || Array.isArray(e)) {
+        errors.push("レコードの形式が不正: " + JSON.stringify(e));
+        continue;
+      }
       if (typeof e.id !== "string" || !e.id) {
         errors.push("IDが不正: " + JSON.stringify(e.id));
         continue;
@@ -1195,8 +1202,11 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       if (endMs < startMs) errors.push("期間が逆転: " + e.id);
       if (e.metric !== "military_deaths") errors.push("指標違い: " + e.id);
       let lossesOk = true;
+      // Fix 3: `f in e.losses` throws when e.losses isn't an object (e.g. a number) — check its shape
+      // before using `in`, same reasoning as the record-shape check above.
+      const lossesIsObject = typeof e.losses === "object" && e.losses !== null;
       for (const f of CASUALTY_FACTIONS) {
-        if (!e.losses || !(f in e.losses)) {
+        if (!lossesIsObject || !(f in e.losses)) {
           errors.push("キー不足(" + f + "): " + e.id);
           lossesOk = false;
           continue;
@@ -1242,7 +1252,14 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     if (endMs === startMs) return 1; // instantaneous bulk-count event
     return Math.min(1, Math.max(0, (ms - startMs) / (endMs - startMs)));
   }
+  // Fix 2 (follow-up review): renderCasualties() already checks CASUALTY_ERRORS before ever calling this,
+  // but window.animation.state() (the public API) called casualtiesAt() unconditionally — with validation
+  // errors, CASUALTY_EVENT_MS is an empty Map, so `CASUALTY_EVENT_MS.get(e)` returns undefined and
+  // destructuring it below throws, taking the whole state() call down with it. Guard here too, so every
+  // caller (public API included) is safe, and return null rather than a zeroed-out normal-shaped result —
+  // "unaggregatable because the data is broken" must stay distinguishable from "aggregated to zero".
   function casualtiesAt(ms) {
+    if (CASUALTY_ERRORS.length) return null;
     const result = {};
     for (const f of CASUALTY_FACTIONS) {
       let knownSubtotal = 0,
@@ -1523,10 +1540,11 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
         if (item.cls === "beach") unplacedBeaches.push(item.el.textContent);
         continue;
       }
-      // R02: text is fixed at construction (ndLabel()), so its box only changes with font/compact-mode —
-      // both already invalidate labelSizeCache via resetLabelSizeCache() — never per frame. Reuse the same
-      // cache placeLabel()'s regular labels already use instead of forcing a fresh layout read here.
-      const { w, h } = getLabelSize(item.el);
+      // R02/Fix 5: text is fixed at construction (ndLabel()), so its box only changes with font/compact-mode
+      // — both already invalidate labelRectSizeCache via resetLabelSizeCache() — never per frame. Cached,
+      // but via getLabelSizePrecise() (getBoundingClientRect(), fractional) rather than getLabelSize()
+      // (offsetWidth/offsetHeight, rounded), matching this code's original pre-cache precision.
+      const { w, h } = getLabelSizePrecise(item.el);
       const targetX = (q.x * 0.5 + 0.5) * stageW,
         targetY = T.MathUtils.clamp((-q.y * 0.5 + 0.5) * stageH + item.dy, 96 + h / 2, stageH - 91 - h / 2);
       let placed = null;
@@ -1617,8 +1635,15 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
 
   // ---- UI exclusion zones for map labels: measured from real DOM rects, recomputed on layout change only ----
   let labelSizeCache = new WeakMap();
+  // Fix 5 (follow-up review): a second cache, keyed and invalidated the same way as labelSizeCache below,
+  // but holding getBoundingClientRect()'s fractional width/height instead of offsetWidth/offsetHeight's
+  // rounded integers. placeNormandyLabels()/labelRect() used getBoundingClientRect() before they were
+  // switched onto a cache; getLabelSize()'s integer precision is placeLabel()'s own pre-existing behavior
+  // for the regular city/sea labels and is left as is.
+  let labelRectSizeCache = new WeakMap();
   function resetLabelSizeCache() {
     labelSizeCache = new WeakMap();
+    labelRectSizeCache = new WeakMap();
   }
   function getLabelSize(el) {
     let s = labelSizeCache.get(el);
@@ -1628,6 +1653,15 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       s = { w, h, text: el.textContent };
       // A hidden element measures 0x0; caching that would freeze it hidden-sized even after it becomes visible.
       if (w > 0 && h > 0) labelSizeCache.set(el, s);
+    }
+    return s;
+  }
+  function getLabelSizePrecise(el) {
+    let s = labelRectSizeCache.get(el);
+    if (!s || s.text !== el.textContent) {
+      const r = el.getBoundingClientRect();
+      s = { w: r.width, h: r.height, text: el.textContent };
+      if (s.w > 0 && s.h > 0) labelRectSizeCache.set(el, s);
     }
     return s;
   }
@@ -1848,9 +1882,10 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   // A placed label's rect for model exclusion (labels are center-anchored via CSS transform:translate(-50%,-50%)).
   function labelRect(el) {
     if (el.style.visibility === "hidden" || el.style.display === "none") return null;
-    // R02: pocket label text is fixed after construction, so reuse the cached size (see placeLabel) instead
-    // of offsetWidth/offsetHeight, which forces a fresh layout read right after placeLabel()'s style write.
-    const { w, h } = getLabelSize(el);
+    // R02/Fix 5: pocket label text is fixed after construction, so cache instead of forcing a fresh layout
+    // read right after placeLabel()'s style write — via getLabelSizePrecise() (getBoundingClientRect(),
+    // fractional), matching this code's original pre-cache precision, not getLabelSize()'s rounded integers.
+    const { w, h } = getLabelSizePrecise(el);
     if (!w || !h) return null;
     const cx = parseFloat(el.style.left),
       cy = parseFloat(el.style.top);
@@ -1980,7 +2015,10 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   // R7: east and west position/orient their regular tanks along their own front the same way, differing
   // only in site count, which front/offset function to read, and the eligibility condition (end-of-front
   // date, on-screen-only during the Normandy detail, etc.), which the caller supplies.
-  function placeTroopsOnFront(troops, siteCount, front, offsetFn, normals, eligibleFor) {
+  // `baseEligibleFor` is time/land only (never camera-dependent) — for east troops the camera-dependent
+  // on-screen test during the Normandy detail is ANDed in separately by resolveEastTroopEligibility()
+  // below, so it can be re-run on a camera move alone without re-deriving front placement here.
+  function placeTroopsOnFront(troops, siteCount, front, offsetFn, normals, baseEligibleFor) {
     for (const tr of troops) {
       const j = Math.round(((tr.i + 0.5) / siteCount) * (front.length - 1)),
         p = (tr.side === "de" ? offsetFn(-1) : offsetFn(1))[j];
@@ -1993,7 +2031,20 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       tr.obj.rotation.y = -Math.atan2(n.z * sign, n.x * sign);
       const px = (p.x / MW + 0.5) * CW,
         py = (p.z / MH + 0.5) * CH;
-      tr.eligible = eligibleFor(p, px, py);
+      tr.baseEligible = baseEligibleFor(p, px, py);
+      tr.eligible = tr.baseEligible;
+      // The exact point onScreenApprox() was (and will be) tested against — p, not tr.obj.position, since
+      // tr.obj.position.y was just overwritten to 0.07 above while p's own y (from the front sample) wasn't.
+      tr.frontPoint = p;
+    }
+  }
+  // East-front candidates during the Normandy detail are further gated by whether they're on-screen
+  // (onScreenApprox reads the live camera), on top of the time/land-only baseEligible placeTroopsOnFront()
+  // just set. Called both after a real time-based placement above and, on its own, from redrawCameraFrame()
+  // below — camera moves and resizes don't change baseEligible, only this on-screen test.
+  function resolveEastTroopEligibility(ddayActive) {
+    for (const tr of eastTroops) {
+      tr.eligible = tr.baseEligible && (!ddayActive || onScreenApprox(tr.frontPoint));
     }
   }
 
@@ -2021,15 +2072,17 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       westActive ? westState.front : null,
     );
 
-    // §3: during the Normandy detail, east-front candidates are limited to what's on-screen.
+    // §3: during the Normandy detail, east-front candidates are limited to what's on-screen (resolved
+    // just below, separately from this time/land-only placement).
     placeTroopsOnFront(
       eastTroops,
       EAST_TROOP_SITES,
       eastState.front,
       eastOffset,
       eastNormals,
-      (p, px, py) => ms < eastEndMs && mc.isPointInPath(landPath, px, py) && (!ddayActive || onScreenApprox(p)),
+      (p, px, py) => ms < eastEndMs && mc.isPointInPath(landPath, px, py),
     );
+    resolveEastTroopEligibility(ddayActive);
 
     // §3: the Normandy detail replaces the broad-view western front entirely.
     for (const tr of westTroops) tr.eligible = false;
@@ -2308,6 +2361,10 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     }
     if (hudSizeDirty) updateLabelExclusionZones();
     const cam = updateCamera(lastFrameMs);
+    // Fix 1 (follow-up review): the camera just moved (or the viewport resized) — east troops' on-screen
+    // gating during the Normandy detail depends on the camera, so it must be re-resolved here too, not
+    // only on a real time-based frame().
+    resolveEastTroopEligibility(lastDdayActive);
     const priorityLabelRects = placePriorityLabels(lastFrameMs, cam, lastEastState, lastWestActive, lastDdayActive);
     resolveModelVisibility(uiExclusionZones.concat(priorityLabelRects), lastDdayActive);
     applyModelVisibility(lastDdayActive);
@@ -2366,13 +2423,18 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     setTopDown(!topDown);
     userAzimuth = 0;
     userZoom = 1;
-    redrawCameraFrame();
+    cameraRedrawPending = true;
   };
   // ---- Pointer handling: per-pointerId tracking so a second finger starts a pinch instead of jumping the drag ----
   const activePointers = new Map();
   let drag = null,
     pinch = null,
     engaged = false;
+  // Fix 4 (follow-up review): drag/pinch/wheel/keydown/the view toggle below only record the state change
+  // and set this flag instead of redrawing immediately — pointermove in particular can fire faster than
+  // rAF, so an immediate redraw per event re-renders the same visual frame multiple times. animate() below
+  // coalesces this into at most one redraw per tick, alongside hudSizeDirty.
+  let cameraRedrawPending = false;
   function pointerDistance() {
     const pts = [...activePointers.values()];
     return Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
@@ -2411,14 +2473,14 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pinch && activePointers.size >= 2) {
       userZoom = T.MathUtils.clamp((pinch.startZoom * pinch.startDistance) / pointerDistance(), 0.5, 2.2);
-      redrawCameraFrame();
+      cameraRedrawPending = true;
       return;
     }
     if (drag && activePointers.size === 1) {
       setTopDown(false);
       userAzimuth = drag.az - (e.clientX - drag.x) * 0.004;
       userElevation = T.MathUtils.clamp(drag.el + (e.clientY - drag.y) * 0.004, 0.48, 1.56);
-      redrawCameraFrame();
+      cameraRedrawPending = true;
     }
   };
   function releasePointer(e) {
@@ -2442,7 +2504,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       if (!engaged) return;
       e.preventDefault();
       userZoom = T.MathUtils.clamp(userZoom - e.deltaY * 0.0006, 0.5, 2.2);
-      redrawCameraFrame();
+      cameraRedrawPending = true;
     },
     { passive: false },
   );
@@ -2459,7 +2521,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       0.48,
       1.56,
     );
-    redrawCameraFrame();
+    cameraRedrawPending = true;
   });
 
   window.animation = {
@@ -2514,9 +2576,13 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       }
     }
     // Redraw while paused too when the HUD's own resize observer flagged a footprint change (e.g. a seek
-    // while stopped changed the casualty text): one extra frame at the same currentSec, then it settles.
+    // while stopped changed the casualty text), or when a camera/view input was recorded above: one
+    // redraw at the same currentSec picks up whatever's pending, then it settles. When playing, frame()
+    // already re-reads the live camera params (currentCameraParams()) on every call, so a time-based frame
+    // this tick already reflects any camera input recorded the same tick — no separate redraw needed.
     if (wasPlaying) frame(currentSec);
-    else if (hudSizeDirty) redrawCameraFrame();
+    else if (hudSizeDirty || cameraRedrawPending) redrawCameraFrame();
+    cameraRedrawPending = false;
     requestAnimationFrame(animate);
   }
   requestAnimationFrame(animate);
